@@ -1,5 +1,19 @@
 # 验证记录
 
+## 1.2.0 固定套餐组合售价（2026-09-17）
+
+- `assembleDebug testDebugUnitTest lintDebug`：成功，35 项测试全部通过。
+- 新增 7 项测试，覆盖套餐创建与购物车恢复、混合收银、共享组成商品库存合并校验、套餐修改校验、实收不足、历史快照与 CSV、删除套餐后退货、促销叠加、零元套餐、非法配置回滚、极大数量及 v2 数据库升级。
+- 安装包：`dist/ZeroPay-1.2.0-debug.apk`，校验值见同名 `.sha256` 文件。
+- 本次未连接设备，未进行实体设备或模拟器验证。
+
+## 自定义价格（2026-09-17）
+
+- `assembleDebug testDebugUnitTest lintDebug`：成功，28 项测试全部通过。
+- 覆盖自定义金额边界、零元、原价上限、订单保存与 CSV 导出、实收不足、退货恢复库存，以及界面输入、重建恢复和结账后重置。
+- 安装包：`app/build/outputs/apk/debug/app-debug.apk`。
+- 本次未进行实体设备验证。
+
 ## 1.1.0 促销功能（2026-09-17）
 
 - `assembleDebug testDebugUnitTest lintDebug`：成功，25 项测试全部通过。

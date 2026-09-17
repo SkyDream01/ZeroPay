@@ -22,6 +22,17 @@ public class PromotionTest {
         assertThrows(IllegalArgumentException.class,()->new Promotion(2,0,1));
         assertThrows(IllegalArgumentException.class,()->new Promotion(2,100,101));
         assertThrows(IllegalArgumentException.class,()->new Promotion(2,100,0));
-        assertThrows(IllegalArgumentException.class,()->new Promotion(3,0,0));
+        assertThrows(IllegalArgumentException.class,()->new Promotion(4,0,0));
+        assertThrows(IllegalArgumentException.class,()->new Promotion(3,1,100));
+        assertThrows(IllegalArgumentException.class,()->new Promotion(3,0,-1));
+        assertThrows(IllegalArgumentException.class,()->new Promotion(3,0,100000001));
+    }
+    @Test public void customPriceCapsPayableAtOriginalTotal() {
+        Promotion p=new Promotion(3,0,Product.cents("12.34"));
+        assertEquals(1234,p.total(2000));assertEquals(1234,p.total(3000));
+        assertEquals(1000,p.total(1000));assertEquals(0,p.total(0));
+        assertEquals(0,new Promotion(3,0,0).total(2000));
+        assertEquals(100000000,new Promotion(3,0,100000000).total(Long.MAX_VALUE));
+        assertEquals("自定义价格 ¥12.34",p.description());
     }
 }

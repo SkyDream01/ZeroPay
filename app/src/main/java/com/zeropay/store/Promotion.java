@@ -10,7 +10,9 @@ public final class Promotion {
     public final long threshold, value;
 
     public Promotion(int type, long threshold, long value) {
-        if (type < 0 || type > 2 || (type == 0 && (threshold != 0 || value != 0))
+        if (type == 3 && (threshold != 0 || value < 0 || value > 100000000))
+            throw new IllegalArgumentException("自定义价格须在 0–1000000 元之间");
+        if (type < 0 || type > 3 || (type == 0 && (threshold != 0 || value != 0))
                 || (type == 1 && (threshold != 0 || value < 1 || value > 99))
                 || (type == 2 && (threshold < 1 || threshold > 100000000 || value < 1 || value > threshold)))
             throw new IllegalArgumentException("折扣须为 0.1–9.9 折；满减门槛须大于 0 且不超过 1000000 元，减免须大于 0 且不超过门槛");
@@ -29,12 +31,14 @@ public final class Promotion {
         if (subtotal < 0) throw new IllegalArgumentException("商品合计不能为负数");
         if (type == 1) return BigDecimal.valueOf(subtotal).multiply(BigDecimal.valueOf(value))
                 .divide(BigDecimal.valueOf(100), 0, RoundingMode.HALF_UP).longValueExact();
+        if (type == 3) return Math.min(subtotal, value);
         return type == 2 && subtotal >= threshold ? subtotal - value : subtotal;
     }
 
     public String description() {
         if (type == 1) return BigDecimal.valueOf(value, 1).stripTrailingZeros().toPlainString() + " 折";
         if (type == 2) return "满 ¥" + Product.money(threshold) + " 减 ¥" + Product.money(value);
+        if (type == 3) return "自定义价格 ¥" + Product.money(value);
         return "无促销";
     }
 }

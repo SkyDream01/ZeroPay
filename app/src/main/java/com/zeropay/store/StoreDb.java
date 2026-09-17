@@ -7,7 +7,7 @@ import java.io.*;
 import java.util.*;
 
 public class StoreDb extends SQLiteOpenHelper {
-    public StoreDb(Context context) { super(context, "zeropay.db", null, 2); }
+    public StoreDb(Context context) { super(context, "zeropay.db", null, 3); }
     @Override public void onConfigure(SQLiteDatabase db) { db.setForeignKeyConstraintsEnabled(true); }
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE products(barcode TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, unit TEXT NOT NULL, price INTEGER NOT NULL CHECK(price>=0), cost INTEGER NOT NULL CHECK(cost>=0), stock INTEGER NOT NULL CHECK(stock>=0), min_stock INTEGER NOT NULL CHECK(min_stock>=0))");
@@ -16,6 +16,7 @@ public class StoreDb extends SQLiteOpenHelper {
         db.execSQL("CREATE TABLE movements(id INTEGER PRIMARY KEY, time INTEGER NOT NULL, barcode TEXT NOT NULL REFERENCES products(barcode), delta INTEGER NOT NULL, balance INTEGER NOT NULL, reason TEXT NOT NULL)");
         db.execSQL("CREATE INDEX movement_time ON movements(time)");
         db.execSQL("CREATE INDEX sale_time ON sales(time)");
+        createBundles(db);
     }
     @Override public void onUpgrade(SQLiteDatabase db,int oldVersion,int newVersion) {
         if(oldVersion<2) {
@@ -24,6 +25,78 @@ public class StoreDb extends SQLiteOpenHelper {
             db.execSQL("ALTER TABLE sales ADD COLUMN promotion TEXT NOT NULL DEFAULT '无促销'");
             db.execSQL("UPDATE sales SET subtotal=total");
         }
+        if(oldVersion<3) createBundles(db);
+    }
+    private void createBundles(SQLiteDatabase db) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS bundles(id TEXT PRIMARY KEY,name TEXT NOT NULL,price INTEGER NOT NULL CHECK(price>=0))");
+        db.execSQL("CREATE TABLE IF NOT EXISTS bundle_items(bundle_id TEXT NOT NULL REFERENCES bundles(id) ON DELETE CASCADE,barcode TEXT NOT NULL REFERENCES products(barcode),qty INTEGER NOT NULL CHECK(qty>0),PRIMARY KEY(bundle_id,barcode))");
+    }
+    public BundleOffer bundle(String id) {
+        List<String[]> rows=rows("SELECT name,price FROM bundles WHERE id=?",id);
+        if(rows.isEmpty())return null;
+        Map<String,Integer> items=new LinkedHashMap<>();
+        for(String[] r:rows("SELECT barcode,qty FROM bundle_items WHERE bundle_id=? ORDER BY barcode",id))items.put(r[0],Integer.parseInt(r[1]));
+        return new BundleOffer(id,rows.get(0)[0],Long.parseLong(rows.get(0)[1]),items);
+    }
+    public List<BundleOffer> bundles() {
+        List<BundleOffer> result=new ArrayList<>();
+        for(String[] r:rows("SELECT id FROM bundles ORDER BY name"))result.add(bundle(r[0]));
+        return result;
+    }
+    public void saveBundle(BundleOffer b) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            for(String code:b.items.keySet())if(find(code)==null)throw new IllegalArgumentException("商品不存在："+code);
+            ContentValues v=new ContentValues();v.put("name",b.name);v.put("price",b.price);
+            if(db.update("bundles",v,"id=?",new String[]{b.id})==0){v.put("id",b.id);db.insertOrThrow("bundles",null,v);}
+            db.delete("bundle_items","bundle_id=?",new String[]{b.id});
+            for(Map.Entry<String,Integer> e:b.items.entrySet()){
+                ContentValues item=new ContentValues();item.put("bundle_id",b.id);item.put("barcode",e.getKey());item.put("qty",e.getValue());db.insertOrThrow("bundle_items",null,item);
+            }
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
+    public void deleteBundle(String id){getWritableDatabase().delete("bundles","id=?",new String[]{id});}
+    public String bundleContents(BundleOffer b) {
+        StringBuilder s=new StringBuilder();
+        for(Map.Entry<String,Integer> e:b.items.entrySet()){
+            if(s.length()>0)s.append("、");
+            Product p=find(e.getKey());s.append(p==null?e.getKey():p.name).append(" [").append(e.getKey()).append("] × ").append(e.getValue());
+        }return s.toString();
+    }
+    public Product cartProduct(String key) {
+        if(!key.startsWith("@"))return find(key);
+        BundleOffer b=bundle(key);if(b==null)return null;
+        int stock=1000000;long cost=0;
+        for(Map.Entry<String,Integer> e:b.items.entrySet()){
+            Product p=find(e.getKey());if(p==null)return null;
+            stock=Math.min(stock,p.stock/e.getValue());cost+=p.cost*e.getValue();
+        }
+        Product p=new Product(key.substring(1),b.name,"套餐","套",b.price,0,stock,0);
+        p.barcode=key;p.cost=cost;return p;
+    }
+    private Map<String,Integer> components(Map<String,Integer> cart) {
+        Map<String,Integer> result=new LinkedHashMap<>();
+        for(Map.Entry<String,Integer> e:cart.entrySet()){
+            if(e.getValue()==null||e.getValue()<1||e.getValue()>1000000)throw new IllegalArgumentException("购买数量须为 1–1000000");
+            Map<String,Integer> parts;
+            if(e.getKey().startsWith("@")){
+                BundleOffer b=bundle(e.getKey());if(b==null)throw new IllegalArgumentException("套餐已删除，请移除后重选");parts=b.items;
+            }else parts=Collections.singletonMap(e.getKey(),1);
+            for(Map.Entry<String,Integer> part:parts.entrySet()){
+                long qty=(long)part.getValue()*e.getValue()+result.getOrDefault(part.getKey(),0);
+                Product p=find(part.getKey());
+                if(p==null||qty>p.stock)throw new IllegalArgumentException((p==null?part.getKey():p.name)+" 库存不足（含套餐及单品合计）");
+                result.put(part.getKey(),(int)qty);
+            }
+        }return result;
+    }
+    public String bundleSnapshot(Map<String,Integer> cart) {
+        StringBuilder s=new StringBuilder();
+        for(Map.Entry<String,Integer> e:cart.entrySet())if(e.getKey().startsWith("@")){
+            BundleOffer b=bundle(e.getKey());if(b==null)throw new IllegalArgumentException("套餐已删除，请移除后重选");
+            s.append("；套餐：").append(b.name).append(" × ").append(e.getValue()).append(" 套，单套 ¥").append(Product.money(b.price)).append("（").append(bundleContents(b)).append("）");
+        }return s.toString();
     }
     private Product product(Cursor c) { return new Product(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getLong(4),c.getLong(5),c.getInt(6),c.getInt(7)); }
     public Product find(String barcode) {
@@ -87,9 +160,10 @@ public class StoreDb extends SQLiteOpenHelper {
         } finally { db.endTransaction(); }
     }
     public long total(Map<String,Integer> cart) {
+        components(cart);
         long sum=0;
         for(Map.Entry<String,Integer> e:cart.entrySet()) {
-            Product p=find(e.getKey()); int qty=e.getValue();
+            Product p=cartProduct(e.getKey()); int qty=e.getValue();
             if(p==null) throw new IllegalArgumentException("商品不存在："+e.getKey());
             if(qty<1 || qty>p.stock) throw new IllegalArgumentException(p.name+" 库存不足（剩余 "+p.stock+"）");
             sum=Math.addExact(sum,Math.multiplyExact(p.price,(long)qty));
@@ -99,18 +173,23 @@ public class StoreDb extends SQLiteOpenHelper {
         return checkout(cart,expectedTotal,paid,method,Promotion.NONE);
     }
     public String checkout(Map<String,Integer> cart,long expectedSubtotal,long paid,String method,Promotion promotion) {
+        return checkout(cart,expectedSubtotal,paid,method,promotion,null);
+    }
+    public String checkout(Map<String,Integer> cart,long expectedSubtotal,long paid,String method,Promotion promotion,String expectedBundles) {
         if(cart.isEmpty()) throw new IllegalArgumentException("购物车为空");
         if(!Arrays.asList("现金","微信（已收款）","支付宝（已收款）","其他（已收款）").contains(method)) throw new IllegalArgumentException("收款方式无效");
         SQLiteDatabase db=getWritableDatabase(); db.beginTransaction();
         try {
             long subtotal=total(cart), total=promotion.total(subtotal);
+            String bundles=bundleSnapshot(cart);
+            if(expectedBundles!=null&&!expectedBundles.equals(bundles))throw new IllegalArgumentException("套餐已变更，请重新结账");
             if(subtotal!=expectedSubtotal) throw new IllegalArgumentException("商品价格已变更，请重新结账");
             if(paid<total) throw new IllegalArgumentException("实收金额不足");
             String id=UUID.randomUUID().toString(); ContentValues sale=new ContentValues();
             sale.put("id",id); sale.put("time",System.currentTimeMillis()); sale.put("total",total); sale.put("paid",paid); sale.put("method",method);
-            sale.put("subtotal",subtotal); sale.put("discount",subtotal-total); sale.put("promotion",promotion.description());
+            sale.put("subtotal",subtotal); sale.put("discount",subtotal-total); sale.put("promotion",promotion.description()+bundles);
             db.insertOrThrow("sales",null,sale);
-            for(Map.Entry<String,Integer> e:cart.entrySet()) {
+            for(Map.Entry<String,Integer> e:components(cart).entrySet()) {
                 Product p=find(e.getKey()); int qty=e.getValue(); ContentValues v=new ContentValues();
                 v.put("sale_id",id); v.put("barcode",p.barcode); v.put("name",p.name); v.put("price",p.price); v.put("cost",p.cost); v.put("qty",qty);
                 db.insertOrThrow("sale_items",null,v);

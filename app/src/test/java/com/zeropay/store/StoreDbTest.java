@@ -40,6 +40,16 @@ public class StoreDbTest {
         assertThrows(IllegalArgumentException.class,()->db.checkout(Map.of("001",11),319,319,"现金",p));
         assertEquals(0,db.scalar("SELECT count(*) FROM sales"));assertEquals(10,db.find("001").stock);
     }
+    @Test public void customPriceIsStoredExportedAndRefunded()throws Exception{
+        Promotion p=new Promotion(3,0,50);
+        assertThrows(IllegalArgumentException.class,()->db.checkout(Map.of("001",3),87,49,"现金",p));
+        String id=db.checkout(Map.of("001",3),87,100,"现金",p);
+        assertEquals(50,db.scalar("SELECT total FROM sales"));assertEquals(37,db.scalar("SELECT discount FROM sales"));
+        StringWriter w=new StringWriter();db.export(w,"sales");List<List<String>> rows=Csv.read(new StringReader(w.toString()));
+        assertEquals(List.of("0.87","0.37","自定义价格 ¥0.50"),rows.get(1).subList(13,16));
+        assertEquals("0.50",rows.get(1).get(4));assertEquals("0.50",rows.get(1).get(6));
+        db.refund(id);assertEquals(10,db.find("001").stock);
+    }
     @Test public void fullReductionAllowsZeroPayment(){
         db.checkout(Map.of("001",1),29,0,"现金",new Promotion(2,29,29));
         assertEquals(0,db.scalar("SELECT total FROM sales"));assertEquals(29,db.scalar("SELECT discount FROM sales"));assertEquals(9,db.find("001").stock);
