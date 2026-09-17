@@ -1,0 +1,294 @@
+package com.zeropay.store;
+
+import android.app.AlertDialog;
+import android.content.*;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Bundle;
+import android.text.*;
+import android.view.*;
+import android.view.inputmethod.EditorInfo;
+import android.widget.*;
+import androidx.activity.ComponentActivity;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import com.journeyapps.barcodescanner.ScanContract;
+import com.journeyapps.barcodescanner.ScanOptions;
+import java.io.*;
+import java.nio.charset.*;
+import java.text.SimpleDateFormat;
+import java.util.*;
+import java.util.concurrent.*;
+
+public class MainActivity extends ComponentActivity {
+    private static final int INK=0xff203b36, GREEN=0xff176557, MUTED=0xff647772, BG=0xfff3f6f5, LINE=0xffdce6e2, AMBER=0xff98601a;
+    private StoreDb db;
+    private LinearLayout root,body,nav,items,summary;
+    private final LinkedHashMap<String,Integer> cart=new LinkedHashMap<>();
+    private Promotion promotion=Promotion.NONE;
+    private final ExecutorService io=Executors.newSingleThreadExecutor();
+    private String page="收银", search="", exportKind="products", scanMode="cart";
+    private boolean lowOnly=false, busy=false;
+    private EditText barcodeTarget;
+    private final ActivityResultLauncher<ScanOptions> scanner=registerForActivityResult(new ScanContract(),result->{
+        if(result.getContents()==null) return;
+        String code=result.getContents().trim();
+        if(scanMode.equals("edit")&&barcodeTarget!=null) barcodeTarget.setText(code);
+        else if(scanMode.equals("inventory")) { search=code; render(); }
+        else addBarcode(code);
+    });
+    private final ActivityResultLauncher<String[]> importer=registerForActivityResult(new ActivityResultContracts.OpenDocument(),uri->{
+        if(uri==null)return;
+        work(()->{
+            try(InputStream in=getContentResolver().openInputStream(uri)) {
+                if(in==null)throw new IOException("无法打开文件");
+                return Csv.products(new InputStreamReader(in,StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)));
+            }
+        },this::previewImport);
+    });
+    private final ActivityResultLauncher<String> exporter=registerForActivityResult(new ActivityResultContracts.CreateDocument("text/csv"),uri->{
+        if(uri==null)return;
+        final String kind=exportKind;
+        work(()->{
+            try(OutputStream out=getContentResolver().openOutputStream(uri,"wt")) {
+                if(out==null)throw new IOException("无法写入文件");
+                try(Writer writer=new BufferedWriter(new OutputStreamWriter(out,StandardCharsets.UTF_8))) { db.export(writer,kind); }
+            }return "CSV 已导出";
+        },this::toast);
+    });
+
+    @Override public void onCreate(Bundle state) {
+        super.onCreate(state); db=new StoreDb(this);
+        if(state!=null) {
+            page=state.getString("page","收银"); search=state.getString("search","");
+            exportKind=state.getString("exportKind","products"); scanMode=state.getString("scanMode","cart");
+            lowOnly=state.getBoolean("lowOnly",false);
+        }
+        restoreCart(); render();
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state); state.putString("page",page); state.putString("search",search);
+        state.putString("exportKind",exportKind); state.putString("scanMode",scanMode); state.putBoolean("lowOnly",lowOnly);
+    }
+    @Override protected void onDestroy() { io.execute(db::close); io.shutdown(); super.onDestroy(); }
+    private void restoreCart() {
+        android.content.SharedPreferences prefs=getPreferences(0);
+        try { promotion=new Promotion(prefs.getInt("promotionType",0),prefs.getLong("promotionThreshold",0),prefs.getLong("promotionValue",0)); }
+        catch(IllegalArgumentException e) { promotion=Promotion.NONE; }
+        String text=getPreferences(0).getString("cart","");
+        for(String line:text.split("\n")) {
+            String[] p=line.split(":");
+            if(p.length==2)try{cart.put(p[0],Integer.parseInt(p[1]));}catch(NumberFormatException ignored){}
+        }
+    }
+    private void persistCart() {
+        if(cart.isEmpty())promotion=Promotion.NONE;
+        StringBuilder s=new StringBuilder(); for(Map.Entry<String,Integer> e:cart.entrySet())s.append(e.getKey()).append(':').append(e.getValue()).append('\n');
+        getPreferences(0).edit().putString("cart",s.toString()).putInt("promotionType",promotion.type)
+            .putLong("promotionThreshold",promotion.threshold).putLong("promotionValue",promotion.value).apply();
+    }
+    private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
+    private LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
+    private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
+    private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(14));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
+    private TextView label(String text,int size,int color,boolean bold){TextView v=new TextView(this);v.setText(text);v.setTextSize(size);v.setTextColor(color);v.setPadding(0,dp(5),0,dp(5));if(bold)v.setTypeface(Typeface.DEFAULT,Typeface.BOLD);return v;}
+    private TextView mono(String text,int size,int color){TextView v=label(text,size,color,true);v.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);return v;}
+    private Button button(String text,boolean primary,Runnable action){Button b=new Button(this);b.setText(text);b.setTextSize(15);b.setAllCaps(false);b.setTextColor(primary?Color.WHITE:GREEN);b.setMinHeight(dp(48));b.setPadding(dp(12),dp(4),dp(12),dp(4));b.setBackground(shape(primary?GREEN:0xffe4efea,0));b.setStateListAnimator(null);b.setElevation(0);b.setOnClickListener(v->{if(!busy)action.run();});return b;}
+    private void put(LinearLayout p,View v){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(10);p.addView(v,lp);}
+    private void weighted(LinearLayout p,View v){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMargins(dp(3),0,dp(3),0);p.addView(v,lp);}
+    private LinearLayout card(LinearLayout parent){LinearLayout c=column();c.setPadding(dp(16),dp(12),dp(16),dp(12));c.setBackground(shape(Color.WHITE,LINE));put(parent,c);return c;}
+    private EditText input(LinearLayout parent,String title,String value,int type){put(parent,label(title,13,MUTED,false));EditText e=new EditText(this);e.setTextSize(16);e.setTextColor(INK);e.setSingleLine(true);e.setInputType(type);e.setText(value);e.setPadding(dp(12),dp(10),dp(12),dp(10));e.setBackground(shape(Color.WHITE,LINE));e.setMinimumHeight(dp(48));put(parent,e);return e;}
+    private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_LONG).show();}
+    private void error(Exception e){new AlertDialog.Builder(this).setTitle("未完成操作").setMessage(e.getMessage()==null?"操作失败，请重试":e.getMessage()).setPositiveButton("知道了",null).show();}
+    private String value(EditText e){return e.getText().toString().trim();}
+    private String time(String ms){return new SimpleDateFormat("MM-dd HH:mm",Locale.CHINA).format(new Date(Long.parseLong(ms)));}
+    private <T> void work(Callable<T> task,java.util.function.Consumer<T> done){
+        if(busy)return;busy=true;toast("正在处理，请稍候…");
+        io.execute(()->{try{T result=task.call();runOnUiThread(()->{busy=false;if(!isDestroyed()){render();done.accept(result);}});}catch(Exception e){runOnUiThread(()->{busy=false;if(!isDestroyed())error(e);});}});
+    }
+    private void render(){
+        root=column();root.setBackgroundColor(BG);root.setPadding(dp(18),0,dp(18),0);
+        if(android.os.Build.VERSION.SDK_INT>=30) root.setOnApplyWindowInsetsListener((v,insets)->{
+            android.graphics.Insets bars=insets.getInsets(WindowInsets.Type.systemBars()|WindowInsets.Type.ime());
+            v.setPadding(dp(18)+bars.left,bars.top,dp(18)+bars.right,bars.bottom);return insets;
+        });
+        if(android.os.Build.VERSION.SDK_INT<30) root.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(18)+i.getSystemWindowInsetLeft(),i.getSystemWindowInsetTop(),dp(18)+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
+        setContentView(root);root.requestApplyInsets();
+        LinearLayout brand=row();weighted(brand,label("▥  ZeroPay",23,INK,true));brand.addView(label("本机 · 离线",12,GREEN,true));put(root,brand);
+        ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);body=column();body.setPadding(0,dp(12),0,dp(10));scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
+        put(body,label(page,30,INK,true));
+        switch(page){case "收银":cashier();break;case "库存":inventory();break;case "流水":history();break;default:data();}
+        nav=row();nav.setPadding(0,dp(10),0,dp(10));
+        for(String tab:new String[]{"收银","库存","流水","数据"}) weighted(nav,button(tab,tab.equals(page),()->{page=tab;search="";render();}));
+        root.addView(nav);
+    }
+    private void scan(String mode){scanMode=mode;scanner.launch(new ScanOptions().setDesiredBarcodeFormats(ScanOptions.ALL_CODE_TYPES).setPrompt("将条码放入取景框 · 支持商品条码与二维码").setBeepEnabled(true).setOrientationLocked(false));}
+    private void cashier(){
+        put(body,label("扫商品条码，开始一笔新交易",14,MUTED,false));
+        LinearLayout panel=card(body);
+        put(panel,button("▥   扫码添加商品",true,()->scan("cart")));
+        EditText code=input(panel,"输入条码 / 扫码枪输入", "", android.text.InputType.TYPE_CLASS_TEXT);
+        code.setHint("如 6901234567892");code.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        code.setOnEditorActionListener((v,id,event)->{if(id==EditorInfo.IME_ACTION_DONE||(event!=null&&event.getKeyCode()==KeyEvent.KEYCODE_ENTER&&event.getAction()==KeyEvent.ACTION_DOWN)){if(!busy){addBarcode(value(code));code.setText("");}return true;}return false;});
+        LinearLayout actions=row();weighted(actions,button("添加条码",false,()->{addBarcode(value(code));code.setText("");}));weighted(actions,button("选择商品",false,this::chooseProduct));put(panel,actions);
+        LinearLayout title=row();weighted(title,label("购物清单",18,INK,true));title.addView(button("清空",false,()->{if(!cart.isEmpty())new AlertDialog.Builder(this).setTitle("清空购物车？").setMessage("商品将从本次交易中移除。").setNegativeButton("取消",null).setPositiveButton("清空",(d,w)->{cart.clear();persistCart();refreshCart();}).show();}));put(body,title);
+        items=column();put(body,items);summary=column();root.addView(summary);refreshCart();
+    }
+    private void refreshCart(){
+        if(items==null||summary==null||!page.equals("收银"))return;items.removeAllViews();summary.removeAllViews();
+        long total=0;int count=0;
+        if(cart.isEmpty()){LinearLayout empty=card(items);put(empty,label("购物车还是空的",20,INK,true));put(empty,label("扫描商品，或从商品库中选择。\n未建档的条码可直接新建商品。",14,MUTED,false));}
+        for(Map.Entry<String,Integer> e:cart.entrySet()){
+            Product p=db.find(e.getKey());if(p==null)continue;int qty=e.getValue();total+=p.price*qty;count+=qty;
+            LinearLayout c=card(items);put(c,label(p.name,18,INK,true));put(c,mono(p.barcode,12,MUTED));
+            LinearLayout r=row();LinearLayout left=column();put(left,label("¥"+Product.money(p.price)+" / "+p.unit+" · 库存 "+p.stock,13,qty>p.stock?AMBER:MUTED,false));put(left,mono("¥"+Product.money(p.price*qty),22,INK));weighted(r,left);
+            Button minus=button("−",false,()->{if(qty==1)cart.remove(p.barcode);else cart.put(p.barcode,qty-1);persistCart();refreshCart();});r.addView(minus,new LinearLayout.LayoutParams(dp(48),dp(48)));
+            TextView n=mono("  "+qty+"  ",17,INK);n.setContentDescription("数量 "+qty+"，点击修改");n.setOnClickListener(v->{if(!busy)cartQuantity(p,qty);});r.addView(n);
+            r.addView(button("+",false,()->addBarcode(p.barcode)),new LinearLayout.LayoutParams(dp(48),dp(48)));put(c,r);
+        }
+        if(!cart.isEmpty()) {
+            LinearLayout offer=card(items);
+            put(offer,button("促销："+promotion.description(),false,this::promotionDialog));
+            long discounted=promotion.total(total);
+            put(offer,label("商品合计 ¥"+Product.money(total)+" · 优惠 ¥"+Product.money(total-discounted),14,GREEN,true));
+            if(promotion.type==2 && total<promotion.threshold)put(offer,label("还差 ¥"+Product.money(promotion.threshold-total)+" 可享满减",13,AMBER,false));
+            total=discounted;
+        }
+        LinearLayout receipt=row();receipt.setPadding(dp(14),dp(8),dp(14),dp(8));receipt.setBackground(shape(0xffdfeee6,0));
+        LinearLayout amount=column();amount.addView(label("应收合计 · "+count+" 件",12,GREEN,true));
+        TextView sum=mono("¥ "+Product.money(total),27,INK);sum.setSingleLine(true);sum.setAutoSizeTextTypeUniformWithConfiguration(12,27,1,android.util.TypedValue.COMPLEX_UNIT_SP);amount.addView(sum,new LinearLayout.LayoutParams(-1,dp(42)));weighted(receipt,amount);
+        Button checkout=button("确认收款  →",true,this::payment);checkout.setEnabled(!cart.isEmpty());weighted(receipt,checkout);summary.addView(receipt,new LinearLayout.LayoutParams(-1,-2));
+    }
+    private void cartQuantity(Product p,int old){
+        LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);EditText n=input(f,"数量（0 表示移除）",String.valueOf(old),2);
+        form("修改数量",f,()->{int q=Product.quantity(value(n));if(q>p.stock)throw new IllegalArgumentException("库存不足");if(q==0)cart.remove(p.barcode);else cart.put(p.barcode,q);persistCart();refreshCart();});
+    }
+    private void addBarcode(String code){
+        if(code.isEmpty()){toast("请先输入商品条码");return;}
+        Product p=db.find(code);
+        if(p==null){new AlertDialog.Builder(this).setTitle("商品尚未建档").setMessage("条码："+code).setNegativeButton("取消",null).setPositiveButton("新建商品",(d,w)->editProduct(null,code)).show();return;}
+        int next=cart.getOrDefault(code,0)+1;
+        if(next>p.stock){toast(p.name+" 库存不足，请先入库");return;}cart.put(code,next);persistCart();refreshCart();
+    }
+    private void chooseProduct(){
+        LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);EditText q=input(f,"商品名 / 条码 / 分类","",1);
+        ListView list=new ListView(this);f.addView(list,new LinearLayout.LayoutParams(-1,dp(320)));
+        final List<Product> found=new ArrayList<>();ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_list_item_1,new ArrayList<>());list.setAdapter(adapter);
+        Runnable update=()->{found.clear();found.addAll(db.products(value(q),false));adapter.clear();for(Product p:found)adapter.add(p.name+"  ¥"+Product.money(p.price)+"\n"+p.barcode+" · 库存 "+p.stock);};update.run();watch(q,update);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("选择商品").setView(f).setNegativeButton("返回",null).create();
+        list.setOnItemClickListener((parent,v,pos,id)->{addBarcode(found.get(pos).barcode);dialog.dismiss();});dialog.show();
+    }
+    private void promotionDialog(){
+        LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);
+        Spinner type=new Spinner(this);type.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"无促销","整单打折","满减"}));put(f,type);
+        LinearLayout discountFields=column(),reductionFields=column();put(f,discountFields);put(f,reductionFields);
+        EditText rate=input(discountFields,"折扣（0.1–9.9 折，如 8.5）",promotion.type==1?java.math.BigDecimal.valueOf(promotion.value,1).toPlainString():"8.5",8194);
+        EditText threshold=input(reductionFields,"满多少元",promotion.type==2?Product.money(promotion.threshold):"100.00",8194);
+        EditText reduction=input(reductionFields,"减多少元",promotion.type==2?Product.money(promotion.value):"10.00",8194);
+        Runnable visibility=()->{discountFields.setVisibility(type.getSelectedItemPosition()==1?View.VISIBLE:View.GONE);reductionFields.setVisibility(type.getSelectedItemPosition()==2?View.VISIBLE:View.GONE);};
+        type.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?> p){}public void onItemSelected(AdapterView<?> p,View v,int pos,long id){visibility.run();}});
+        type.setSelection(promotion.type);visibility.run();
+        put(f,label("仅用于本单，不叠加。打折后的应收金额四舍五入到分；满减达到门槛减一次，未达门槛按原价。清空或结账后自动取消促销。",13,MUTED,false));
+        form("设置促销",f,()->{
+            int selected=type.getSelectedItemPosition();
+            promotion=selected==0?Promotion.NONE:selected==1?Promotion.discount(value(rate)):new Promotion(2,Product.cents(value(threshold)),Product.cents(value(reduction)));
+            persistCart();refreshCart();
+        });
+    }
+    private void payment(){
+        final Promotion applied=promotion;
+        final long subtotal,total;try{subtotal=db.total(cart);total=applied.total(subtotal);}catch(Exception e){error(e);return;}
+        LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);put(f,mono("应收 ¥"+Product.money(total),28,INK));
+        put(f,label("商品合计 ¥"+Product.money(subtotal)+"\n"+applied.description()+" · 优惠 ¥"+Product.money(subtotal-total),14,GREEN,false));
+        put(f,label("收款方式",14,MUTED,false));Spinner method=new Spinner(this);String[] methods={"现金","微信（已收款）","支付宝（已收款）","其他（已收款）"};method.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,methods));put(f,method);
+        EditText paid=input(f,"实收金额（元）",Product.money(total),8194);TextView change=label("找零 ¥0.00",16,GREEN,true);put(f,change);
+        watch(paid,()->{try{long n=Product.cents(value(paid));change.setText(n>=total?"找零 ¥"+Product.money(n-total):"实收金额不足");}catch(Exception e){change.setText("请输入有效金额");}});
+        method.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){paid.setEnabled(pos==0);paid.setText(Product.money(total));}});
+        put(f,label("微信、支付宝等仅记录已收到的款项，请先在对应收款工具中核实到账。",13,MUTED,false));
+        form("结账",f,()->{
+            long amount=Product.cents(value(paid));String id=db.checkout(new LinkedHashMap<>(cart),subtotal,amount,methods[method.getSelectedItemPosition()],applied);cart.clear();persistCart();render();
+            new AlertDialog.Builder(this).setTitle("收款已记录").setMessage("订单 "+id.substring(0,8)+"\n合计 ¥"+Product.money(total)+"\n找零 ¥"+Product.money(amount-total)+"\n库存已同步扣减").setPositiveButton("完成",null).show();
+        });
+    }
+    private void inventory(){
+        long all=db.scalar("SELECT count(*) FROM products"),low=db.scalar("SELECT count(*) FROM products WHERE stock<=min_stock");
+        LinearLayout metrics=row();weighted(metrics,metric("商品种类",String.valueOf(all),INK));weighted(metrics,metric("库存预警",String.valueOf(low),AMBER));put(body,metrics);
+        LinearLayout actions=row();weighted(actions,button("+ 新建商品",true,()->editProduct(null,"")));weighted(actions,button("扫码查库存",false,()->scan("inventory")));put(body,actions);
+        EditText q=input(body,"搜索商品",search,1);q.setHint("名称、条码或分类");
+        CheckBox check=new CheckBox(this);check.setText("仅显示库存预警商品");check.setTextColor(INK);check.setChecked(lowOnly);put(body,check);
+        LinearLayout results=column();put(body,results);
+        Runnable update=()->{search=value(q);results.removeAllViews();List<Product> products=db.products(search,lowOnly);
+            if(products.isEmpty()){put(results,label(all==0?"先创建商品，或到「数据」导入 CSV。":"没有找到匹配的商品",16,MUTED,false));return;}
+            put(results,label("找到 "+products.size()+" 种商品"+(products.size()>200?"，显示前 200 种，请缩小搜索范围":""),12,MUTED,false));
+            for(Product p:products.subList(0,Math.min(products.size(),200))){
+                LinearLayout c=card(results);LinearLayout r=row();LinearLayout info=column();put(info,label(p.name,18,INK,true));put(info,mono(p.barcode,12,MUTED));weighted(r,info);r.addView(mono(String.valueOf(p.stock)+" "+p.unit,20,p.stock<=p.minimum?AMBER:GREEN));put(c,r);
+                put(c,label((p.category.isEmpty()?"未分类":p.category)+"  ·  售价 ¥"+Product.money(p.price)+"  ·  预警 ≤ "+p.minimum,13,MUTED,false));
+                LinearLayout tools=row();weighted(tools,button("入 / 出库",true,()->stockDialog(p)));weighted(tools,button("编辑",false,()->editProduct(p,p.barcode)));put(c,tools);
+            }
+        };watch(q,update);check.setOnCheckedChangeListener((b,checked)->{lowOnly=checked;update.run();});update.run();
+    }
+    private LinearLayout metric(String title,String value,int color){LinearLayout c=column();c.setPadding(dp(16),dp(12),dp(12),dp(12));c.setBackground(shape(Color.WHITE,LINE));put(c,label(title,13,MUTED,false));TextView n=mono(value,28,color);n.setSingleLine(true);n.setAutoSizeTextTypeUniformWithConfiguration(12,28,1,android.util.TypedValue.COMPLEX_UNIT_SP);c.addView(n,new LinearLayout.LayoutParams(-1,dp(48)));return c;}
+    private void editProduct(Product old,String barcode){
+        LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);
+        EditText code=input(f,"商品条码",barcode,1);code.setEnabled(old==null);barcodeTarget=code;
+        if(old==null)put(f,button("扫描条码",false,()->scan("edit")));
+        EditText name=input(f,"商品名称",old==null?"":old.name,1),category=input(f,"分类",old==null?"":old.category,1),unit=input(f,"单位",old==null?"件":old.unit,1);
+        EditText price=input(f,"零售价（元）",old==null?"":Product.money(old.price),8194),cost=input(f,"成本价（元）",old==null?"0.00":Product.money(old.cost),8194);
+        EditText stock=input(f,old==null?"初始库存":"当前库存（通过入 / 出库变更）",old==null?"0":String.valueOf(old.stock),2);stock.setEnabled(old==null);
+        EditText min=input(f,"库存预警值",old==null?"5":String.valueOf(old.minimum),2);
+        form(old==null?"新建商品":"编辑商品",f,()->{Product p=new Product(value(code),value(name),value(category),value(unit),Product.cents(value(price)),Product.cents(value(cost)),Product.quantity(value(stock)),Product.quantity(value(min)));db.save(p,old==null);render();toast("商品已保存");});
+    }
+    private void stockDialog(Product p){
+        LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);put(f,label(p.name+" · 当前 "+p.stock+" "+p.unit,18,INK,true));
+        Spinner type=new Spinner(this);String[] types={"采购入库","领用 / 损耗出库","盘点：设置实际库存"};type.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));put(f,type);
+        EditText qty=input(f,"数量", "",2),reason=input(f,"备注 / 原因","",1);
+        form("库存变更",f,()->{int n=Product.quantity(value(qty));int pos=type.getSelectedItemPosition();if(pos!=2&&n==0)throw new IllegalArgumentException("入 / 出库数量须大于 0");if(value(reason).isEmpty())throw new IllegalArgumentException("请填写备注 / 原因");db.adjust(p.barcode,pos==1?-n:n,pos==2,types[pos]+"："+value(reason));render();toast("库存已更新");});
+    }
+    private void history(){
+        long today=java.time.LocalDate.now().atStartOfDay(java.time.ZoneId.systemDefault()).toInstant().toEpochMilli();
+        LinearLayout metrics=row();weighted(metrics,metric("今日有效销售额","¥"+Product.money(db.scalar("SELECT COALESCE(sum(total),0) FROM sales WHERE refunded=0 AND time>="+today)),GREEN));weighted(metrics,metric("今日有效订单",String.valueOf(db.scalar("SELECT count(*) FROM sales WHERE refunded=0 AND time>="+today)),INK));put(body,metrics);
+        put(body,label("销售订单",20,INK,true));put(body,label("最近 100 笔 · 完整历史可导出 CSV",12,MUTED,false));
+        List<String[]> sales=db.rows("SELECT id,time,total,method,refunded FROM sales ORDER BY time DESC LIMIT 100");
+        if(sales.isEmpty())put(body,label("还没有销售订单，完成首笔收款后会显示在这里。",15,MUTED,false));
+        for(String[] s:sales){LinearLayout c=card(body);LinearLayout r=row();weighted(r,mono("¥"+Product.money(Long.parseLong(s[2])),24,INK));r.addView(label(s[4].equals("1")?"已退货":"已完成",13,s[4].equals("1")?AMBER:GREEN,true));put(c,r);put(c,label(time(s[1])+" · "+s[3]+" · "+s[0].substring(0,8),12,MUTED,false));put(c,button("查看订单",false,()->saleDetail(s[0])));}
+        put(body,label("库存流水",20,INK,true));put(body,label("最近 100 条 · 入库、出库、盘点与退货",12,MUTED,false));
+        List<String[]> movements=db.rows("SELECT m.time,p.name,m.delta,m.balance,m.reason FROM movements m JOIN products p ON p.barcode=m.barcode ORDER BY m.id DESC LIMIT 100");
+        if(movements.isEmpty())put(body,label("暂无库存变更记录",15,MUTED,false));
+        for(String[] m:movements){LinearLayout c=card(body);put(c,label(m[1]+"    "+(Integer.parseInt(m[2])>0?"+":"")+m[2]+"  →  "+m[3],16,INK,true));put(c,label(time(m[0])+" · "+m[4],12,MUTED,false));}
+    }
+    private void saleDetail(String id){
+        String[] sale=db.rows("SELECT time,total,paid,method,refunded,subtotal,discount,promotion FROM sales WHERE id=?",id).get(0);
+        StringBuilder text=new StringBuilder("订单 "+id+"\n"+time(sale[0])+" · "+sale[3]+"\n\n");
+        for(String[] r:db.rows("SELECT name,qty,price FROM sale_items WHERE sale_id=?",id))text.append(r[0]).append(" × ").append(r[1]).append("   ¥").append(Product.money(Long.parseLong(r[1])*Long.parseLong(r[2]))).append('\n');
+        text.append("\n商品合计 ¥").append(Product.money(Long.parseLong(sale[5]))).append("\n促销：").append(sale[7]).append("\n优惠 ¥").append(Product.money(Long.parseLong(sale[6])));
+        text.append("\n合计 ¥").append(Product.money(Long.parseLong(sale[1]))).append("\n实收 ¥").append(Product.money(Long.parseLong(sale[2]))).append("\n找零 ¥").append(Product.money(Long.parseLong(sale[2])-Long.parseLong(sale[1])));
+        AlertDialog.Builder b=new AlertDialog.Builder(this).setTitle(sale[4].equals("1")?"订单已退货":"订单详情").setMessage(text).setPositiveButton("关闭",null);
+        if(sale[4].equals("0"))b.setNeutralButton("整单退货",(d,w)->new AlertDialog.Builder(this).setTitle("确认整单退货？").setMessage("全部商品将恢复库存，订单标记为已退货。\n请在外部收款工具中自行完成退款 ¥"+Product.money(Long.parseLong(sale[1]))+"。此操作不会发起资金退款。").setNegativeButton("取消",null).setPositiveButton("退款已处理，记录退货",(dd,ww)->{try{db.refund(id);render();toast("退货已记录，库存已恢复");}catch(Exception e){error(e);}}).show());b.show();
+    }
+    private void data(){
+        put(body,label("CSV 数据交换",16,MUTED,false));
+        LinearLayout c=card(body);put(c,label("导入商品",22,INK,true));put(c,label("按条码匹配，更新名称、价格和分类。新条码自动建档。导入前会检查格式并显示预览。",14,MUTED,false));
+        put(c,button("选择 CSV 文件",true,()->importer.launch(new String[]{"text/*","application/csv","application/vnd.ms-excel","application/octet-stream"})));
+        put(c,button("导出商品模板",false,()->export("template")));
+        LinearLayout out=card(body);put(out,label("导出数据",22,INK,true));put(out,label("UTF-8 编码，兼容带逗号、换行的商品名称。文件保存位置由你选择。",14,MUTED,false));
+        put(out,button("导出商品与当前库存",false,()->export("products")));put(out,button("导出销售明细",false,()->export("sales")));put(out,button("导出库存流水",false,()->export("movements")));
+        LinearLayout note=card(body);put(note,label("使用说明",18,INK,true));put(note,label("• 条码作为文本保存，支持前导零。用表格软件打开时，请把条码列设为文本。\n\n• 售价与成本单位为元，最多两位小数；库存为非负整数。\n\n• 商品 CSV 支持重新导入；销售与库存流水 CSV 用于查账，不支持导入恢复历史订单。\n\n• 数据保存在本机，卸载应用会删除数据，请定期导出。\n\n• 相机扫码需要相机权限；也可手输条码或使用回车结尾的扫码枪。",14,MUTED,false));
+        put(body,label("ZeroPay 零点收银  1.1.0 · 单店离线版",12,MUTED,false));
+    }
+    private void export(String kind){exportKind=kind;exporter.launch("ZeroPay_"+kind+"_"+new SimpleDateFormat("yyyyMMdd_HHmmss",Locale.ROOT).format(new Date())+".csv");}
+    private void previewImport(List<Product> products){
+        int existing=0;for(Product p:products)if(db.find(p.barcode)!=null)existing++;
+        LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);put(f,label("共 "+products.size()+" 条 · 新增 "+(products.size()-existing)+" · 更新 "+existing,18,INK,true));
+        for(Product p:products.subList(0,Math.min(5,products.size())))put(f,label(p.barcode+"  "+p.name+"\n¥"+Product.money(p.price)+" · CSV 库存 "+p.stock,13,MUTED,false));
+        CheckBox overwrite=new CheckBox(this);overwrite.setText("用 CSV 覆盖已有商品库存");put(f,overwrite);put(f,label("默认保留已有库存，新商品使用 CSV 库存。勾选后按 CSV 数量盘点，并记录差异流水。未列出的商品保持原样。",13,MUTED,false));
+        form("确认导入",f,()->{boolean replace=overwrite.isChecked();work(()->{db.importProducts(products,replace);return "已导入 "+products.size()+" 条商品";},this::toast);});
+    }
+    private void form(String title,LinearLayout content,Runnable save){
+        ScrollView scroll=new ScrollView(this);scroll.addView(content);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(scroll).setNegativeButton("取消",null).setPositiveButton("确认",null).create();
+        dialog.show();
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(busy)return;try{save.run();dialog.dismiss();}catch(Exception e){error(e);}});
+    }
+    private void watch(EditText e,Runnable changed){e.addTextChangedListener(new TextWatcher(){public void beforeTextChanged(CharSequence s,int st,int c,int a){}public void onTextChanged(CharSequence s,int st,int before,int count){changed.run();}public void afterTextChanged(Editable v){}});}
+}
