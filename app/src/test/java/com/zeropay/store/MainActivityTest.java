@@ -12,6 +12,17 @@ import static org.junit.Assert.*;
 
 @RunWith(RobolectricTestRunner.class) @Config(sdk=35)
 public class MainActivityTest {
+    @Test public void inventoryAddsAndDeletesWithConfirmation(){
+        var context=RuntimeEnvironment.getApplication();context.deleteDatabase("zeropay.db");context.getSharedPreferences("MainActivity",0).edit().clear().commit();
+        try(var controller=Robolectric.buildActivity(MainActivity.class).setup();StoreDb db=new StoreDb(context)){
+            MainActivity a=controller.get();navigate(a,"库存");find(a.getWindow().getDecorView(),"+ 添加商品").performClick();
+            AlertDialog editor=latestDialog();java.util.List<EditText> fields=new java.util.ArrayList<>();inputs(editor.getWindow().getDecorView(),fields);
+            fields.get(0).setText("000123");fields.get(1).setText("新增茶");fields.get(4).setText("2.50");fields.get(6).setText("8");
+            editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();assertEquals(8,db.find("000123").stock);
+            find(a.getWindow().getDecorView(),"删除商品").performClick();latestDialog().getButton(AlertDialog.BUTTON_NEGATIVE).performClick();org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertNotNull(db.find("000123"));
+            find(a.getWindow().getDecorView(),"删除商品").performClick();latestDialog().getButton(AlertDialog.BUTTON_POSITIVE).performClick();org.robolectric.Shadows.shadowOf(android.os.Looper.getMainLooper()).idle();assertNull(db.find("000123"));
+        }
+    }
     private void navigate(MainActivity a,String tab){
         View label=find(a.getWindow().getDecorView(),tab);
         while(label!=null&&!label.isClickable())label=label.getParent() instanceof View?(View)label.getParent():null;

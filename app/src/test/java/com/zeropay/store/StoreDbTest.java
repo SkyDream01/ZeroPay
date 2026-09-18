@@ -14,6 +14,35 @@ public class StoreDbTest {
     @Before public void setup(){RuntimeEnvironment.getApplication().deleteDatabase("zeropay.db");db=new StoreDb(RuntimeEnvironment.getApplication());db.save(p("001",10),true);}
     @After public void close(){db.close();}
     private Product p(String code,int stock){return new Product(code,"茶","饮料","瓶",29,10,stock,2);}
+    @Test public void deletedProductKeepsHistoryAndCanBeRestored()throws Exception{
+        String id=db.checkout(Map.of("001",3),87,100,"现金");
+        db.deleteProduct("001");assertNull(db.find("001"));assertTrue(db.products("",false).isEmpty());
+        assertThrows(IllegalArgumentException.class,()->db.checkout(Map.of("001",1),29,29,"现金"));
+        StringWriter products=new StringWriter();db.export(products,"products");assertEquals(1,Csv.read(new StringReader(products.toString())).size());
+        assertEquals(1,db.scalar("SELECT count(*) FROM sale_items"));assertEquals(2,db.scalar("SELECT count(*) FROM movements"));
+        db.refund(id);assertNull(db.find("001"));assertEquals(10,db.scalar("SELECT stock FROM products WHERE barcode='001'"));
+        db.save(p("001",99),true);assertEquals(10,db.find("001").stock);
+    }
+    @Test public void bundleReferencePreventsDeletion(){
+        db.saveBundle(new BundleOffer("@tea","茶套餐",50,Map.of("001",2)));
+        assertThrows(IllegalArgumentException.class,()->db.deleteProduct("001"));
+        assertNotNull(db.find("001"));assertEquals(10,db.find("001").stock);
+        db.deleteBundle("@tea");db.deleteProduct("001");assertNull(db.find("001"));
+    }
+    @Test public void importRestoresDeletedProductAndRollsBackOnFailure(){
+        db.deleteProduct("001");Product bad=p("002",1);bad.price=-1;
+        assertThrows(IllegalArgumentException.class,()->db.importProducts(List.of(p("001",30),bad),true));
+        assertNull(db.find("001"));assertEquals(10,db.scalar("SELECT stock FROM products WHERE barcode='001'"));
+        db.importProducts(List.of(p("001",30)),false);assertEquals(10,db.find("001").stock);
+        db.deleteProduct("001");db.importProducts(List.of(p("001",30)),true);assertEquals(30,db.find("001").stock);
+    }
+    @Test public void versionThreeUpgradePreservesProductsAndOrders(){
+        String id=db.checkout(Map.of("001",1),29,29,"现金");
+        var sql=db.getWritableDatabase();sql.execSQL("ALTER TABLE products DROP COLUMN deleted");sql.setVersion(3);
+        db.close();db=new StoreDb(RuntimeEnvironment.getApplication());
+        assertEquals(9,db.find("001").stock);db.deleteProduct("001");db.refund(id);
+        assertEquals(10,db.scalar("SELECT stock FROM products WHERE barcode='001'"));
+    }
     @Test public void checkoutIsExactAndRefundIsIdempotent(){Map<String,Integer> cart=Map.of("001",3);String id=db.checkout(cart,87,100,"现金");assertEquals(7,db.find("001").stock);assertEquals(87,db.scalar("SELECT total FROM sales"));db.refund(id);assertEquals(10,db.find("001").stock);assertThrows(IllegalArgumentException.class,()->db.refund(id));assertEquals(10,db.find("001").stock);}
     @Test public void insufficientStockNeverWritesOrder(){db.save(p("002",1),true);Map<String,Integer> cart=new LinkedHashMap<>();cart.put("001",2);cart.put("002",2);assertThrows(IllegalArgumentException.class,()->db.checkout(cart,116,116,"现金"));assertEquals(10,db.find("001").stock);assertEquals(0,db.scalar("SELECT count(*) FROM sales"));}
     @Test public void rejectsUnderpaymentAndChangedPrice(){assertThrows(IllegalArgumentException.class,()->db.checkout(Map.of("001",1),29,28,"现金"));assertThrows(IllegalArgumentException.class,()->db.checkout(Map.of("001",1),30,30,"现金"));assertEquals(10,db.find("001").stock);}
@@ -60,7 +89,7 @@ public class StoreDbTest {
         sql.execSQL("CREATE TABLE sales(id TEXT PRIMARY KEY,time INTEGER NOT NULL,total INTEGER NOT NULL,paid INTEGER NOT NULL,method TEXT NOT NULL,refunded INTEGER NOT NULL DEFAULT 0)");
         sql.execSQL("INSERT INTO sales VALUES('legacy',1,87,100,'现金',0)");
         sql.execSQL("INSERT INTO sale_items(sale_id,barcode,name,price,cost,qty) VALUES('legacy','001','茶',29,10,3)");
-        sql.setVersion(1);db.close();db=new StoreDb(RuntimeEnvironment.getApplication());
+        sql.execSQL("ALTER TABLE products DROP COLUMN deleted");sql.setVersion(1);db.close();db=new StoreDb(RuntimeEnvironment.getApplication());
         assertEquals(87,db.scalar("SELECT subtotal FROM sales"));assertEquals(0,db.scalar("SELECT discount FROM sales"));
         assertEquals("无促销",db.rows("SELECT promotion FROM sales").get(0)[0]);assertEquals(10,db.find("001").stock);
         db.refund("legacy");assertEquals(13,db.find("001").stock);

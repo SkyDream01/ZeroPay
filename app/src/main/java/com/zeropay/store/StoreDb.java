@@ -7,10 +7,10 @@ import java.io.*;
 import java.util.*;
 
 public class StoreDb extends SQLiteOpenHelper {
-    public StoreDb(Context context) { super(context, "zeropay.db", null, 3); }
+    public StoreDb(Context context) { super(context, "zeropay.db", null, 4); }
     @Override public void onConfigure(SQLiteDatabase db) { db.setForeignKeyConstraintsEnabled(true); }
     @Override public void onCreate(SQLiteDatabase db) {
-        db.execSQL("CREATE TABLE products(barcode TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, unit TEXT NOT NULL, price INTEGER NOT NULL CHECK(price>=0), cost INTEGER NOT NULL CHECK(cost>=0), stock INTEGER NOT NULL CHECK(stock>=0), min_stock INTEGER NOT NULL CHECK(min_stock>=0))");
+        db.execSQL("CREATE TABLE products(barcode TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, unit TEXT NOT NULL, price INTEGER NOT NULL CHECK(price>=0), cost INTEGER NOT NULL CHECK(cost>=0), stock INTEGER NOT NULL CHECK(stock>=0), min_stock INTEGER NOT NULL CHECK(min_stock>=0), deleted INTEGER NOT NULL DEFAULT 0)");
         db.execSQL("CREATE TABLE sales(id TEXT PRIMARY KEY, time INTEGER NOT NULL, total INTEGER NOT NULL, paid INTEGER NOT NULL, method TEXT NOT NULL, refunded INTEGER NOT NULL DEFAULT 0, subtotal INTEGER NOT NULL DEFAULT 0, discount INTEGER NOT NULL DEFAULT 0, promotion TEXT NOT NULL DEFAULT '无促销')");
         db.execSQL("CREATE TABLE sale_items(id INTEGER PRIMARY KEY, sale_id TEXT NOT NULL REFERENCES sales(id), barcode TEXT NOT NULL REFERENCES products(barcode), name TEXT NOT NULL, price INTEGER NOT NULL, cost INTEGER NOT NULL, qty INTEGER NOT NULL CHECK(qty>0))");
         db.execSQL("CREATE TABLE movements(id INTEGER PRIMARY KEY, time INTEGER NOT NULL, barcode TEXT NOT NULL REFERENCES products(barcode), delta INTEGER NOT NULL, balance INTEGER NOT NULL, reason TEXT NOT NULL)");
@@ -26,6 +26,7 @@ public class StoreDb extends SQLiteOpenHelper {
             db.execSQL("UPDATE sales SET subtotal=total");
         }
         if(oldVersion<3) createBundles(db);
+        if(oldVersion<4) db.execSQL("ALTER TABLE products ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0");
     }
     private void createBundles(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE IF NOT EXISTS bundles(id TEXT PRIMARY KEY,name TEXT NOT NULL,price INTEGER NOT NULL CHECK(price>=0))");
@@ -100,29 +101,42 @@ public class StoreDb extends SQLiteOpenHelper {
     }
     private Product product(Cursor c) { return new Product(c.getString(0),c.getString(1),c.getString(2),c.getString(3),c.getLong(4),c.getLong(5),c.getInt(6),c.getInt(7)); }
     public Product find(String barcode) {
-        try(Cursor c=getReadableDatabase().rawQuery("SELECT * FROM products WHERE barcode=?",new String[]{barcode})) { return c.moveToFirst()?product(c):null; }
+        return lookup(barcode,false);
+    }
+    private Product lookup(String barcode,boolean includeDeleted) {
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT * FROM products WHERE barcode=?"+(includeDeleted?"":" AND deleted=0"),new String[]{barcode})) { return c.moveToFirst()?product(c):null; }
     }
     public List<Product> products(String query,boolean low) {
         List<Product> result=new ArrayList<>();
         String term="%"+query.replace("\\","\\\\").replace("%","\\%").replace("_","\\_")+"%";
-        try(Cursor c=getReadableDatabase().rawQuery("SELECT * FROM products WHERE (barcode LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')"+(low?" AND stock<=min_stock":"")+" ORDER BY name COLLATE LOCALIZED",new String[]{term,term,term})) {
+        try(Cursor c=getReadableDatabase().rawQuery("SELECT * FROM products WHERE deleted=0 AND (barcode LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\' OR category LIKE ? ESCAPE '\\')"+(low?" AND stock<=min_stock":"")+" ORDER BY name COLLATE LOCALIZED",new String[]{term,term,term})) {
             while(c.moveToNext()) result.add(product(c));
         } return result;
     }
     public void save(Product p,boolean creating) {
         SQLiteDatabase db=getWritableDatabase(); db.beginTransaction();
         try {
-            Product old=find(p.barcode);
-            if (creating && old!=null) throw new IllegalArgumentException("该条码已存在，请编辑现有商品");
-            if (!creating && old==null) throw new IllegalArgumentException("商品不存在");
+            Product old=lookup(p.barcode,true);
+            if (creating && find(p.barcode)!=null) throw new IllegalArgumentException("该条码已存在，请编辑现有商品");
+            if (!creating && find(p.barcode)==null) throw new IllegalArgumentException("商品不存在");
             // Edits never replace inventory: inventory is changed only through a movement.
             if (old!=null) p.stock=old.stock;
             upsert(p,old,"初始库存"); db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
     }
+    public void deleteProduct(String barcode) {
+        SQLiteDatabase db=getWritableDatabase();db.beginTransaction();
+        try {
+            if(find(barcode)==null)throw new IllegalArgumentException("商品不存在");
+            if(!rows("SELECT bundle_id FROM bundle_items WHERE barcode=?",barcode).isEmpty())
+                throw new IllegalArgumentException("该商品用于套餐，请先在套餐管理中移除该商品或删除相关套餐");
+            db.execSQL("UPDATE products SET deleted=1 WHERE barcode=?",new Object[]{barcode});
+            db.setTransactionSuccessful();
+        }finally{db.endTransaction();}
+    }
     private void upsert(Product p,Product old,String reason) {
         p.validate(); SQLiteDatabase db=getWritableDatabase(); ContentValues v=new ContentValues();
-        v.put("barcode",p.barcode); v.put("name",p.name); v.put("category",p.category); v.put("unit",p.unit);
+        v.put("deleted",0); v.put("barcode",p.barcode); v.put("name",p.name); v.put("category",p.category); v.put("unit",p.unit);
         v.put("price",p.price); v.put("cost",p.cost); v.put("stock",p.stock); v.put("min_stock",p.minimum);
         if(old==null) db.insertOrThrow("products",null,v); else db.update("products",v,"barcode=?",new String[]{p.barcode});
         int delta=p.stock-(old==null?0:old.stock);
@@ -151,7 +165,7 @@ public class StoreDb extends SQLiteOpenHelper {
             Set<String> seen=new HashSet<>();
             for(Product p:products) {
                 if(!seen.add(p.barcode)) throw new IllegalArgumentException("重复条码："+p.barcode);
-                Product old=find(p.barcode);
+                Product old=lookup(p.barcode,true);
                 Product copy=new Product(p.barcode,p.name,p.category,p.unit,p.price,p.cost,
                     old!=null&&!overwriteStock?old.stock:p.stock,p.minimum);
                 upsert(copy,old,"CSV 导入");
@@ -207,7 +221,7 @@ public class StoreDb extends SQLiteOpenHelper {
             }
             try(Cursor c=db.rawQuery("SELECT barcode,qty FROM sale_items WHERE sale_id=?",new String[]{id})) {
                 while(c.moveToNext()) {
-                    Product p=find(c.getString(0)); int qty=c.getInt(1);
+                    Product p=lookup(c.getString(0),true); int qty=c.getInt(1);
                     if((long)p.stock+qty>1000000) throw new IllegalArgumentException("退货后库存超过上限");
                     db.execSQL("UPDATE products SET stock=stock+? WHERE barcode=?",new Object[]{qty,p.barcode});
                     movement(p.barcode,qty,p.stock+qty,"整单退货 "+id);

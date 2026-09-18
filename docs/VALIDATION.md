@@ -44,3 +44,11 @@
 尚未进行真实相机识码、USB/蓝牙扫码枪、不同品牌系统文件选择器或实体手机兼容性测试。支付方式为离线记账，不接入实际支付服务。模拟器测试商品不会随 APK 安装。
 
 Gradle UTP 设备测试入口曾因 Maven TLS 下载中断失败；使用同一测试 APK 通过 `adb shell am instrument` 直接运行成功。
+
+## 库存添加、删除与竖屏扫描（2026-09-18）
+
+- `assembleDebug testDebugUnitTest lintDebug` 通过，40 项 JVM / Robolectric 测试全部通过。
+- 新增 5 项回归测试，覆盖库存表单添加、删除确认与取消、删除后历史保留及退货、同条码恢复、套餐引用限制、CSV 恢复与失败回滚、v3 数据库升级；已有 v1/v2 升级测试继续通过。
+- 检查合并后的 Manifest：实际扫描入口 `PortraitCaptureActivity` 配置为 `portrait`，收银、库存查询、新建商品均使用此入口。
+- 安装包：`app/build/outputs/apk/debug/app-debug.apk`。
+- 本次无连接设备，未生成新设备截图，未进行真实相机识码、旋转屏幕或实体扫码枪验证。

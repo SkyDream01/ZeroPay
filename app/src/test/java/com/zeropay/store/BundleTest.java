@@ -66,7 +66,7 @@ public class BundleTest {
     }
     @Test public void versionTwoUpgradePreservesExistingSale(){
         String id=db.checkout(Map.of("A",1),500,500,"现金");
-        var sql=db.getWritableDatabase();sql.execSQL("DROP TABLE bundle_items");sql.execSQL("DROP TABLE bundles");sql.setVersion(2);
+        var sql=db.getWritableDatabase();sql.execSQL("DROP TABLE bundle_items");sql.execSQL("DROP TABLE bundles");sql.execSQL("ALTER TABLE products DROP COLUMN deleted");sql.setVersion(2);
         db.close();db=new StoreDb(RuntimeEnvironment.getApplication());
         assertTrue(db.bundles().isEmpty());assertEquals(500,db.scalar("SELECT total FROM sales"));
         db.refund(id);assertEquals(10,db.find("A").stock);

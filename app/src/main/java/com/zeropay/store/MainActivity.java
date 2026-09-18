@@ -174,7 +174,7 @@ public class MainActivity extends AppCompatActivity {
         });
         root.addView(nav,new LinearLayout.LayoutParams(-1,-2));
     }
-    private void scan(String mode){scanMode=mode;scanner.launch(new ScanOptions().setDesiredBarcodeFormats(ScanOptions.ALL_CODE_TYPES).setPrompt("将条码放入取景框 · 支持商品条码与二维码").setBeepEnabled(true).setOrientationLocked(false));}
+    private void scan(String mode){scanMode=mode;scanner.launch(new ScanOptions().setDesiredBarcodeFormats(ScanOptions.ALL_CODE_TYPES).setPrompt("将条码放入取景框 · 支持商品条码与二维码").setBeepEnabled(true).setCaptureActivity(PortraitCaptureActivity.class).setOrientationLocked(true));}
     private void cashier(){
         put(body,label("扫商品条码，开始一笔新交易",14,MUTED,false));
         LinearLayout panel=card(body);
@@ -309,9 +309,9 @@ public class MainActivity extends AppCompatActivity {
         });
     }
     private void inventory(){
-        long all=db.scalar("SELECT count(*) FROM products"),low=db.scalar("SELECT count(*) FROM products WHERE stock<=min_stock");
+        long all=db.scalar("SELECT count(*) FROM products WHERE deleted=0"),low=db.scalar("SELECT count(*) FROM products WHERE deleted=0 AND stock<=min_stock");
         LinearLayout metrics=row();weighted(metrics,metric("商品种类",String.valueOf(all),INK));weighted(metrics,metric("库存预警",String.valueOf(low),AMBER));put(body,metrics);
-        LinearLayout actions=row();weighted(actions,button("+ 新建商品",true,()->editProduct(null,"")));weighted(actions,button("扫码查库存",false,()->scan("inventory")));put(body,actions);
+        LinearLayout actions=row();weighted(actions,button("+ 添加商品",true,()->editProduct(null,"")));weighted(actions,button("扫码查库存",false,()->scan("inventory")));put(body,actions);
         put(body,button("套餐管理",false,()->bundleList(true)));
         EditText q=input(body,"搜索商品",search,1);((TextInputLayout)q.getParent().getParent()).setPlaceholderText("名称、条码或分类");
         CheckBox check=new MaterialCheckBox(this);check.setText("仅显示库存预警商品");check.setTextColor(INK);check.setChecked(lowOnly);put(body,check);
@@ -323,8 +323,16 @@ public class MainActivity extends AppCompatActivity {
                 LinearLayout c=card(results);LinearLayout r=row();LinearLayout info=column();put(info,label(p.name,18,INK,true));put(info,mono(p.barcode,12,MUTED));weighted(r,info);r.addView(mono(String.valueOf(p.stock)+" "+p.unit,20,p.stock<=p.minimum?AMBER:GREEN));put(c,r);
                 put(c,label((p.category.isEmpty()?"未分类":p.category)+"  ·  售价 ¥"+Product.money(p.price)+"  ·  预警 ≤ "+p.minimum,13,MUTED,false));
                 LinearLayout tools=row();weighted(tools,button("入 / 出库",true,()->stockDialog(p)));weighted(tools,button("编辑",false,()->editProduct(p,p.barcode)));put(c,tools);
+                put(c,button("删除商品",false,()->deleteProduct(p)));
             }
         };watch(q,update);check.setOnCheckedChangeListener((b,checked)->{lowOnly=checked;update.run();});update.run();
+    }
+    private void deleteProduct(Product p){
+        new MaterialAlertDialogBuilder(this).setTitle("删除商品？")
+            .setMessage("删除「"+p.name+"」（"+p.barcode+"）后，将从库存和收银中隐藏，并从购物车移除。历史订单、库存流水和退货保留。重新添加同一条码可恢复商品，保留原库存（含退货），不使用填写的初始库存。")
+            .setNegativeButton("取消",null).setPositiveButton("删除",(d,w)->{
+                try{db.deleteProduct(p.barcode);cart.remove(p.barcode);persistCart();render();toast("商品已删除");}catch(Exception e){error(e);}
+            }).show();
     }
     private LinearLayout metric(String title,String value,int color){LinearLayout c=column();c.setPadding(dp(16),dp(12),dp(12),dp(12));c.setBackground(shape(getColor(R.color.surface_container),0));put(c,label(title,13,MUTED,false));TextView n=mono(value,28,color);n.setSingleLine(true);n.setAutoSizeTextTypeUniformWithConfiguration(12,28,1,android.util.TypedValue.COMPLEX_UNIT_SP);c.addView(n,new LinearLayout.LayoutParams(-1,dp(48)));return c;}
     private void editProduct(Product old,String barcode){
