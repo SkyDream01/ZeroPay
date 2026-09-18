@@ -1,8 +1,17 @@
 package com.zeropay.store;
 
-import android.app.AlertDialog;
+import androidx.appcompat.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+import com.google.android.material.button.MaterialButton;
+import com.google.android.material.card.MaterialCardView;
+import com.google.android.material.checkbox.MaterialCheckBox;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.bottomnavigation.BottomNavigationView;
+import com.google.android.material.navigation.NavigationBarView;
+import com.google.android.material.textfield.TextInputLayout;
+import com.google.android.material.textfield.TextInputEditText;
+import com.google.android.material.appbar.MaterialToolbar;
 import android.content.*;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
@@ -10,7 +19,7 @@ import android.text.*;
 import android.view.*;
 import android.view.inputmethod.EditorInfo;
 import android.widget.*;
-import androidx.activity.ComponentActivity;
+
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import com.journeyapps.barcodescanner.ScanContract;
@@ -21,10 +30,10 @@ import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.*;
 
-public class MainActivity extends ComponentActivity {
-    private static final int INK=0xff203b36, GREEN=0xff176557, MUTED=0xff647772, BG=0xfff3f6f5, LINE=0xffdce6e2, AMBER=0xff98601a;
+public class MainActivity extends AppCompatActivity {
+    private int INK, GREEN, MUTED, BG, LINE, AMBER;
     private StoreDb db;
-    private LinearLayout root,body,nav,items,summary;
+    private LinearLayout root,body,items,summary;
     private final LinkedHashMap<String,Integer> cart=new LinkedHashMap<>();
     private Promotion promotion=Promotion.NONE;
     private final ExecutorService io=Executors.newSingleThreadExecutor();
@@ -59,7 +68,11 @@ public class MainActivity extends ComponentActivity {
     });
 
     @Override public void onCreate(Bundle state) {
-        super.onCreate(state); db=new StoreDb(this);
+        super.onCreate(state);
+        INK=getColor(R.color.on_surface); GREEN=getColor(R.color.primary);
+        MUTED=getColor(R.color.on_surface_variant); BG=getColor(R.color.surface);
+        LINE=getColor(R.color.outline_variant); AMBER=getColor(R.color.warning);
+        db=new StoreDb(this);
         if(state!=null) {
             page=state.getString("page","收银"); search=state.getString("search","");
             exportKind=state.getString("exportKind","products"); scanMode=state.getString("scanMode","cart");
@@ -91,16 +104,36 @@ public class MainActivity extends ComponentActivity {
     private int dp(int n){return Math.round(n*getResources().getDisplayMetrics().density);}
     private LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
     private LinearLayout row(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.HORIZONTAL);l.setGravity(Gravity.CENTER_VERTICAL);return l;}
-    private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(14));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
+    private GradientDrawable shape(int color,int stroke){GradientDrawable d=new GradientDrawable();d.setColor(color);d.setCornerRadius(dp(24));if(stroke!=0)d.setStroke(dp(1),stroke);return d;}
     private TextView label(String text,int size,int color,boolean bold){TextView v=new TextView(this);v.setText(text);v.setTextSize(size);v.setTextColor(color);v.setPadding(0,dp(5),0,dp(5));if(bold)v.setTypeface(Typeface.DEFAULT,Typeface.BOLD);return v;}
     private TextView mono(String text,int size,int color){TextView v=label(text,size,color,true);v.setTypeface(Typeface.MONOSPACE,Typeface.BOLD);return v;}
-    private Button button(String text,boolean primary,Runnable action){Button b=new Button(this);b.setText(text);b.setTextSize(15);b.setAllCaps(false);b.setTextColor(primary?Color.WHITE:GREEN);b.setMinHeight(dp(48));b.setPadding(dp(12),dp(4),dp(12),dp(4));b.setBackground(shape(primary?GREEN:0xffe4efea,0));b.setStateListAnimator(null);b.setElevation(0);b.setOnClickListener(v->{if(!busy)action.run();});return b;}
+    private Button button(String text,boolean primary,Runnable action){
+        int style=primary?com.google.android.material.R.attr.materialButtonStyle:com.google.android.material.R.attr.materialButtonTonalStyle;
+        MaterialButton b=new MaterialButton(this,null,style);
+        b.setText(text);b.setTextSize(14);b.setAllCaps(false);b.setMinHeight(dp(48));
+        b.setMinimumWidth(0);b.setMinWidth(0);b.setPadding(dp(16),dp(4),dp(16),dp(4));
+        b.setOnClickListener(v->{if(!busy)action.run();});return b;
+    }
     private void put(LinearLayout p,View v){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);lp.bottomMargin=dp(10);p.addView(v,lp);}
     private void weighted(LinearLayout p,View v){LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(0,-2,1);lp.setMargins(dp(3),0,dp(3),0);p.addView(v,lp);}
-    private LinearLayout card(LinearLayout parent){LinearLayout c=column();c.setPadding(dp(16),dp(12),dp(16),dp(12));c.setBackground(shape(Color.WHITE,LINE));put(parent,c);return c;}
-    private EditText input(LinearLayout parent,String title,String value,int type){put(parent,label(title,13,MUTED,false));EditText e=new EditText(this);e.setTextSize(16);e.setTextColor(INK);e.setSingleLine(true);e.setInputType(type);e.setText(value);e.setPadding(dp(12),dp(10),dp(12),dp(10));e.setBackground(shape(Color.WHITE,LINE));e.setMinimumHeight(dp(48));put(parent,e);return e;}
+    private LinearLayout card(LinearLayout parent){
+        MaterialCardView surface=new MaterialCardView(this);
+        surface.setRadius(dp(20));surface.setCardElevation(0);surface.setStrokeWidth(0);
+        surface.setCardBackgroundColor(getColor(R.color.surface_low));
+        LinearLayout c=column();c.setPadding(dp(16),dp(16),dp(16),dp(12));
+        surface.addView(c);put(parent,surface);return c;
+    }
+    private EditText input(LinearLayout parent,String title,String value,int type){
+        TextInputLayout field=new TextInputLayout(this,null,com.google.android.material.R.attr.textInputOutlinedStyle);
+        field.setHint(title);field.setBoxCornerRadii(dp(12),dp(12),dp(12),dp(12));
+        TextInputEditText e=new TextInputEditText(field.getContext());
+        e.setTextSize(16);e.setSingleLine(true);e.setInputType(type);e.setText(value);
+        e.setMinimumHeight(dp(56));field.addView(e,new LinearLayout.LayoutParams(-1,-2));
+        LinearLayout.LayoutParams lp=new LinearLayout.LayoutParams(-1,-2);
+        lp.topMargin=dp(6);lp.bottomMargin=dp(14);parent.addView(field,lp);return e;
+    }
     private void toast(String text){Toast.makeText(this,text,Toast.LENGTH_LONG).show();}
-    private void error(Exception e){new AlertDialog.Builder(this).setTitle("未完成操作").setMessage(e.getMessage()==null?"操作失败，请重试":e.getMessage()).setPositiveButton("知道了",null).show();}
+    private void error(Exception e){new MaterialAlertDialogBuilder(this).setTitle("未完成操作").setMessage(e.getMessage()==null?"操作失败，请重试":e.getMessage()).setPositiveButton("知道了",null).show();}
     private String value(EditText e){return e.getText().toString().trim();}
     private String time(String ms){return new SimpleDateFormat("MM-dd HH:mm",Locale.CHINA).format(new Date(Long.parseLong(ms)));}
     private <T> void work(Callable<T> task,java.util.function.Consumer<T> done){
@@ -115,13 +148,31 @@ public class MainActivity extends ComponentActivity {
         });
         if(android.os.Build.VERSION.SDK_INT<30) root.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(dp(18)+i.getSystemWindowInsetLeft(),i.getSystemWindowInsetTop(),dp(18)+i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
         setContentView(root);root.requestApplyInsets();
-        LinearLayout brand=row();weighted(brand,label("▥  ZeroPay",23,INK,true));brand.addView(label("本机 · 离线",12,GREEN,true));put(root,brand);
+        MaterialToolbar brand=new MaterialToolbar(this);
+        brand.setTitle("ZeroPay");brand.setSubtitle("本机 · 离线");
+        brand.setTitleTextColor(INK);brand.setSubtitleTextColor(MUTED);
+        root.addView(brand,new LinearLayout.LayoutParams(-1,dp(64)));
         ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);scroll.setClipToPadding(false);body=column();body.setPadding(0,dp(12),0,dp(10));scroll.addView(body);root.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
         put(body,label(page,30,INK,true));
         switch(page){case "收银":cashier();break;case "库存":inventory();break;case "流水":history();break;default:data();}
-        nav=row();nav.setPadding(0,dp(10),0,dp(10));
-        for(String tab:new String[]{"收银","库存","流水","数据"}) weighted(nav,button(tab,tab.equals(page),()->{page=tab;search="";render();}));
-        root.addView(nav);
+        BottomNavigationView nav=new BottomNavigationView(this);
+        nav.setBackgroundColor(getColor(R.color.surface_container));
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(nav,(v,insets)->insets);
+        nav.setLabelVisibilityMode(NavigationBarView.LABEL_VISIBILITY_LABELED);
+        nav.setItemHorizontalTranslationEnabled(false);
+        String[] tabs={"收银","库存","流水","数据"};
+        int[] icons={R.drawable.ic_cashier,R.drawable.ic_inventory,R.drawable.ic_history,R.drawable.ic_data};
+        for(int i=0;i<tabs.length;i++){
+            nav.getMenu().add(0,i+1,i,tabs[i]).setIcon(icons[i]);
+            if(tabs[i].equals(page))nav.getMenu().getItem(i).setChecked(true);
+        }
+        nav.setOnItemSelectedListener(item->{
+            if(busy)return false;
+            String next=item.getTitle().toString();
+            if(!page.equals(next)){page=next;search="";render();}
+            return true;
+        });
+        root.addView(nav,new LinearLayout.LayoutParams(-1,-2));
     }
     private void scan(String mode){scanMode=mode;scanner.launch(new ScanOptions().setDesiredBarcodeFormats(ScanOptions.ALL_CODE_TYPES).setPrompt("将条码放入取景框 · 支持商品条码与二维码").setBeepEnabled(true).setOrientationLocked(false));}
     private void cashier(){
@@ -129,11 +180,11 @@ public class MainActivity extends ComponentActivity {
         LinearLayout panel=card(body);
         put(panel,button("▥   扫码添加商品",true,()->scan("cart")));
         EditText code=input(panel,"输入条码 / 扫码枪输入", "", android.text.InputType.TYPE_CLASS_TEXT);
-        code.setHint("如 6901234567892");code.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        ((TextInputLayout)code.getParent().getParent()).setPlaceholderText("如 6901234567892");code.setImeOptions(EditorInfo.IME_ACTION_DONE);
         code.setOnEditorActionListener((v,id,event)->{if(id==EditorInfo.IME_ACTION_DONE||(event!=null&&event.getKeyCode()==KeyEvent.KEYCODE_ENTER&&event.getAction()==KeyEvent.ACTION_DOWN)){if(!busy){addBarcode(value(code));code.setText("");}return true;}return false;});
         LinearLayout actions=row();weighted(actions,button("添加条码",false,()->{addBarcode(value(code));code.setText("");}));weighted(actions,button("选择商品",false,this::chooseProduct));put(panel,actions);
         put(panel,button("选择套餐",false,()->bundleList(false)));
-        LinearLayout title=row();weighted(title,label("购物清单",18,INK,true));title.addView(button("清空",false,()->{if(!cart.isEmpty())new AlertDialog.Builder(this).setTitle("清空购物车？").setMessage("商品将从本次交易中移除。").setNegativeButton("取消",null).setPositiveButton("清空",(d,w)->{cart.clear();persistCart();refreshCart();}).show();}));put(body,title);
+        LinearLayout title=row();weighted(title,label("购物清单",18,INK,true));title.addView(button("清空",false,()->{if(!cart.isEmpty())new MaterialAlertDialogBuilder(this).setTitle("清空购物车？").setMessage("商品将从本次交易中移除。").setNegativeButton("取消",null).setPositiveButton("清空",(d,w)->{cart.clear();persistCart();refreshCart();}).show();}));put(body,title);
         items=column();put(body,items);summary=column();root.addView(summary);refreshCart();
     }
     private void refreshCart(){
@@ -145,9 +196,9 @@ public class MainActivity extends ComponentActivity {
             LinearLayout c=card(items);put(c,label(p.name,18,INK,true));put(c,mono(p.barcode,12,MUTED));
             if(p.barcode.startsWith("@"))put(c,label(db.bundleContents(db.bundle(p.barcode)),13,MUTED,false));
             LinearLayout r=row();LinearLayout left=column();put(left,label("¥"+Product.money(p.price)+" / "+p.unit+" · 库存 "+p.stock,13,qty>p.stock?AMBER:MUTED,false));put(left,mono("¥"+Product.money(p.price*qty),22,INK));weighted(r,left);
-            Button minus=button("−",false,()->{if(qty==1)cart.remove(p.barcode);else cart.put(p.barcode,qty-1);persistCart();refreshCart();});r.addView(minus,new LinearLayout.LayoutParams(dp(48),dp(48)));
-            TextView n=mono("  "+qty+"  ",17,INK);n.setContentDescription("数量 "+qty+"，点击修改");n.setOnClickListener(v->{if(!busy)cartQuantity(p,qty);});r.addView(n);
-            r.addView(button("+",false,()->addBarcode(p.barcode)),new LinearLayout.LayoutParams(dp(48),dp(48)));put(c,r);
+            Button minus=button("−",false,()->{if(qty==1)cart.remove(p.barcode);else cart.put(p.barcode,qty-1);persistCart();refreshCart();});minus.setContentDescription("减少 "+p.name+" 数量");r.addView(minus,new LinearLayout.LayoutParams(dp(48),dp(48)));
+            TextView n=mono("  "+qty+"  ",17,INK);n.setMinimumWidth(dp(48));n.setMinimumHeight(dp(48));n.setGravity(Gravity.CENTER);n.setContentDescription("数量 "+qty+"，点击修改");n.setOnClickListener(v->{if(!busy)cartQuantity(p,qty);});r.addView(n);
+            Button plus=button("+",false,()->addBarcode(p.barcode));plus.setContentDescription("增加 "+p.name+" 数量");r.addView(plus,new LinearLayout.LayoutParams(dp(48),dp(48)));put(c,r);
         }
         if(!cart.isEmpty()) {
             LinearLayout offer=card(items);
@@ -157,8 +208,8 @@ public class MainActivity extends ComponentActivity {
             if(promotion.type==2 && total<promotion.threshold)put(offer,label("还差 ¥"+Product.money(promotion.threshold-total)+" 可享满减",13,AMBER,false));
             total=discounted;
         }
-        LinearLayout receipt=row();receipt.setPadding(dp(14),dp(8),dp(14),dp(8));receipt.setBackground(shape(0xffdfeee6,0));
-        LinearLayout amount=column();amount.addView(label("应收合计 · "+count+" 件/套",12,GREEN,true));
+        LinearLayout receipt=row();receipt.setPadding(dp(14),dp(8),dp(14),dp(8));receipt.setBackground(shape(getColor(R.color.primary_container),0));
+        LinearLayout amount=column();amount.addView(label("应收合计 · "+count+" 件/套",12,getColor(R.color.on_primary_container),true));
         TextView sum=mono("¥ "+Product.money(total),27,INK);sum.setSingleLine(true);sum.setAutoSizeTextTypeUniformWithConfiguration(12,27,1,android.util.TypedValue.COMPLEX_UNIT_SP);amount.addView(sum,new LinearLayout.LayoutParams(-1,dp(42)));weighted(receipt,amount);
         Button checkout=button("确认收款  →",true,this::payment);checkout.setEnabled(!cart.isEmpty());weighted(receipt,checkout);summary.addView(receipt,new LinearLayout.LayoutParams(-1,-2));
     }
@@ -169,7 +220,7 @@ public class MainActivity extends ComponentActivity {
     private void addBarcode(String code){
         if(code.isEmpty()){toast("请先输入商品条码");return;}
         Product p=db.cartProduct(code);
-        if(p==null){new AlertDialog.Builder(this).setTitle("商品尚未建档").setMessage("条码："+code).setNegativeButton("取消",null).setPositiveButton("新建商品",(d,w)->editProduct(null,code)).show();return;}
+        if(p==null){new MaterialAlertDialogBuilder(this).setTitle("商品尚未建档").setMessage("条码："+code).setNegativeButton("取消",null).setPositiveButton("新建商品",(d,w)->editProduct(null,code)).show();return;}
         int next=cart.getOrDefault(code,0)+1;
         Map<String,Integer> candidate=new LinkedHashMap<>(cart);candidate.put(code,next);
         try{db.total(candidate);}catch(Exception e){error(e);return;}
@@ -183,12 +234,12 @@ public class MainActivity extends ComponentActivity {
         ListView list=new ListView(this);f.addView(list,new LinearLayout.LayoutParams(-1,dp(320)));
         final List<Product> found=new ArrayList<>();ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_list_item_1,new ArrayList<>());list.setAdapter(adapter);
         Runnable update=()->{found.clear();found.addAll(db.products(value(q),false));adapter.clear();for(Product p:found)adapter.add(p.name+"  ¥"+Product.money(p.price)+"\n"+p.barcode+" · 库存 "+p.stock);};update.run();watch(q,update);
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("选择商品").setView(f).setNegativeButton("返回",null).create();
+        AlertDialog dialog=new MaterialAlertDialogBuilder(this).setTitle("选择商品").setView(f).setNegativeButton("返回",null).create();
         list.setOnItemClickListener((parent,v,pos,id)->{chosen.accept(found.get(pos));dialog.dismiss();});dialog.show();
     }
     private void bundleList(boolean manage){
         LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(manage?"套餐管理":"选择套餐").setNegativeButton("关闭",null).create();
+        AlertDialog dialog=new MaterialAlertDialogBuilder(this).setTitle(manage?"套餐管理":"选择套餐").setNegativeButton("关闭",null).create();
         if(manage)put(f,button("+ 新建套餐",true,()->{dialog.dismiss();editBundle(null);}));
         List<BundleOffer> bundles=db.bundles();
         if(bundles.isEmpty())put(f,label("暂无套餐，请到库存 → 套餐管理创建。",15,MUTED,false));
@@ -197,7 +248,7 @@ public class MainActivity extends ComponentActivity {
             put(c,label(db.bundleContents(b)+"\n最多可售 "+db.cartProduct(b.id).stock+" 套（以结账时合计库存为准）",13,MUTED,false));
             if(manage){
                 put(c,button("编辑套餐",false,()->{dialog.dismiss();editBundle(b);}));
-                put(c,button("删除套餐",false,()->new AlertDialog.Builder(this).setTitle("删除套餐？").setMessage("删除「"+b.name+"」，并从当前购物车移除；历史订单保留。").setNegativeButton("取消",null).setPositiveButton("删除",(d,w)->{db.deleteBundle(b.id);cart.remove(b.id);persistCart();dialog.dismiss();render();}).show()));
+                put(c,button("删除套餐",false,()->new MaterialAlertDialogBuilder(this).setTitle("删除套餐？").setMessage("删除「"+b.name+"」，并从当前购物车移除；历史订单保留。").setNegativeButton("取消",null).setPositiveButton("删除",(d,w)->{db.deleteBundle(b.id);cart.remove(b.id);persistCart();dialog.dismiss();render();}).show()));
             }else put(c,button("加入套餐",true,()->{addBarcode(b.id);dialog.dismiss();}));
         }
         ScrollView scroll=new ScrollView(this);scroll.addView(f);dialog.setView(scroll);dialog.show();
@@ -224,7 +275,7 @@ public class MainActivity extends ComponentActivity {
     }
     private void promotionDialog(){
         LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);
-        Spinner type=new Spinner(this);type.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"无促销","整单打折","满减","自定义价格"}));put(f,type);
+        Spinner type=new androidx.appcompat.widget.AppCompatSpinner(this);type.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,new String[]{"无促销","整单打折","满减","自定义价格"}));put(f,type);
         LinearLayout discountFields=column(),reductionFields=column(),customFields=column();put(f,discountFields);put(f,reductionFields);put(f,customFields);
         EditText rate=input(discountFields,"折扣（0.1–9.9 折，如 8.5）",promotion.type==1?java.math.BigDecimal.valueOf(promotion.value,1).toPlainString():"8.5",8194);
         EditText threshold=input(reductionFields,"满多少元",promotion.type==2?Product.money(promotion.threshold):"100.00",8194);
@@ -247,14 +298,14 @@ public class MainActivity extends ComponentActivity {
         LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);put(f,mono("应收 ¥"+Product.money(total),28,INK));
         if(!bundles.isEmpty())put(f,label(bundles.substring(1),14,MUTED,false));
         put(f,label("商品/套餐合计 ¥"+Product.money(subtotal)+"\n"+applied.description()+" · 优惠 ¥"+Product.money(subtotal-total),14,GREEN,false));
-        put(f,label("收款方式",14,MUTED,false));Spinner method=new Spinner(this);String[] methods={"现金","微信（已收款）","支付宝（已收款）","其他（已收款）"};method.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,methods));put(f,method);
+        put(f,label("收款方式",14,MUTED,false));Spinner method=new androidx.appcompat.widget.AppCompatSpinner(this);String[] methods={"现金","微信（已收款）","支付宝（已收款）","其他（已收款）"};method.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,methods));put(f,method);
         EditText paid=input(f,"实收金额（元）",Product.money(total),8194);TextView change=label("找零 ¥0.00",16,GREEN,true);put(f,change);
         watch(paid,()->{try{long n=Product.cents(value(paid));change.setText(n>=total?"找零 ¥"+Product.money(n-total):"实收金额不足");}catch(Exception e){change.setText("请输入有效金额");}});
         method.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> p){}public void onItemSelected(android.widget.AdapterView<?> p,View v,int pos,long id){paid.setEnabled(pos==0);paid.setText(Product.money(total));}});
         put(f,label("微信、支付宝等仅记录已收到的款项，请先在对应收款工具中核实到账。",13,MUTED,false));
         form("结账",f,()->{
             long amount=Product.cents(value(paid));String id=db.checkout(new LinkedHashMap<>(cart),subtotal,amount,methods[method.getSelectedItemPosition()],applied,bundles);cart.clear();persistCart();render();
-            new AlertDialog.Builder(this).setTitle("收款已记录").setMessage("订单 "+id.substring(0,8)+"\n合计 ¥"+Product.money(total)+"\n找零 ¥"+Product.money(amount-total)+"\n库存已同步扣减").setPositiveButton("完成",null).show();
+            new MaterialAlertDialogBuilder(this).setTitle("收款已记录").setMessage("订单 "+id.substring(0,8)+"\n合计 ¥"+Product.money(total)+"\n找零 ¥"+Product.money(amount-total)+"\n库存已同步扣减").setPositiveButton("完成",null).show();
         });
     }
     private void inventory(){
@@ -262,8 +313,8 @@ public class MainActivity extends ComponentActivity {
         LinearLayout metrics=row();weighted(metrics,metric("商品种类",String.valueOf(all),INK));weighted(metrics,metric("库存预警",String.valueOf(low),AMBER));put(body,metrics);
         LinearLayout actions=row();weighted(actions,button("+ 新建商品",true,()->editProduct(null,"")));weighted(actions,button("扫码查库存",false,()->scan("inventory")));put(body,actions);
         put(body,button("套餐管理",false,()->bundleList(true)));
-        EditText q=input(body,"搜索商品",search,1);q.setHint("名称、条码或分类");
-        CheckBox check=new CheckBox(this);check.setText("仅显示库存预警商品");check.setTextColor(INK);check.setChecked(lowOnly);put(body,check);
+        EditText q=input(body,"搜索商品",search,1);((TextInputLayout)q.getParent().getParent()).setPlaceholderText("名称、条码或分类");
+        CheckBox check=new MaterialCheckBox(this);check.setText("仅显示库存预警商品");check.setTextColor(INK);check.setChecked(lowOnly);put(body,check);
         LinearLayout results=column();put(body,results);
         Runnable update=()->{search=value(q);results.removeAllViews();List<Product> products=db.products(search,lowOnly);
             if(products.isEmpty()){put(results,label(all==0?"先创建商品，或到「数据」导入 CSV。":"没有找到匹配的商品",16,MUTED,false));return;}
@@ -275,7 +326,7 @@ public class MainActivity extends ComponentActivity {
             }
         };watch(q,update);check.setOnCheckedChangeListener((b,checked)->{lowOnly=checked;update.run();});update.run();
     }
-    private LinearLayout metric(String title,String value,int color){LinearLayout c=column();c.setPadding(dp(16),dp(12),dp(12),dp(12));c.setBackground(shape(Color.WHITE,LINE));put(c,label(title,13,MUTED,false));TextView n=mono(value,28,color);n.setSingleLine(true);n.setAutoSizeTextTypeUniformWithConfiguration(12,28,1,android.util.TypedValue.COMPLEX_UNIT_SP);c.addView(n,new LinearLayout.LayoutParams(-1,dp(48)));return c;}
+    private LinearLayout metric(String title,String value,int color){LinearLayout c=column();c.setPadding(dp(16),dp(12),dp(12),dp(12));c.setBackground(shape(getColor(R.color.surface_container),0));put(c,label(title,13,MUTED,false));TextView n=mono(value,28,color);n.setSingleLine(true);n.setAutoSizeTextTypeUniformWithConfiguration(12,28,1,android.util.TypedValue.COMPLEX_UNIT_SP);c.addView(n,new LinearLayout.LayoutParams(-1,dp(48)));return c;}
     private void editProduct(Product old,String barcode){
         LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);
         EditText code=input(f,"商品条码",barcode,1);code.setEnabled(old==null);barcodeTarget=code;
@@ -288,7 +339,7 @@ public class MainActivity extends ComponentActivity {
     }
     private void stockDialog(Product p){
         LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);put(f,label(p.name+" · 当前 "+p.stock+" "+p.unit,18,INK,true));
-        Spinner type=new Spinner(this);String[] types={"采购入库","领用 / 损耗出库","盘点：设置实际库存"};type.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));put(f,type);
+        Spinner type=new androidx.appcompat.widget.AppCompatSpinner(this);String[] types={"采购入库","领用 / 损耗出库","盘点：设置实际库存"};type.setAdapter(new ArrayAdapter<>(this,android.R.layout.simple_spinner_dropdown_item,types));put(f,type);
         EditText qty=input(f,"数量", "",2),reason=input(f,"备注 / 原因","",1);
         form("库存变更",f,()->{int n=Product.quantity(value(qty));int pos=type.getSelectedItemPosition();if(pos!=2&&n==0)throw new IllegalArgumentException("入 / 出库数量须大于 0");if(value(reason).isEmpty())throw new IllegalArgumentException("请填写备注 / 原因");db.adjust(p.barcode,pos==1?-n:n,pos==2,types[pos]+"："+value(reason));render();toast("库存已更新");});
     }
@@ -311,8 +362,8 @@ public class MainActivity extends ComponentActivity {
         for(String[] r:db.rows("SELECT name,qty,price FROM sale_items WHERE sale_id=?",id))text.append(r[0]).append(" × ").append(r[1]).append("   ¥").append(Product.money(Long.parseLong(r[1])*Long.parseLong(r[2]))).append('\n');
         text.append("\n商品/套餐合计 ¥").append(Product.money(Long.parseLong(sale[5]))).append("\n促销及套餐：").append(sale[7]).append("\n整单优惠 ¥").append(Product.money(Long.parseLong(sale[6])));
         text.append("\n合计 ¥").append(Product.money(Long.parseLong(sale[1]))).append("\n实收 ¥").append(Product.money(Long.parseLong(sale[2]))).append("\n找零 ¥").append(Product.money(Long.parseLong(sale[2])-Long.parseLong(sale[1])));
-        AlertDialog.Builder b=new AlertDialog.Builder(this).setTitle(sale[4].equals("1")?"订单已退货":"订单详情").setMessage(text).setPositiveButton("关闭",null);
-        if(sale[4].equals("0"))b.setNeutralButton("整单退货",(d,w)->new AlertDialog.Builder(this).setTitle("确认整单退货？").setMessage("全部商品将恢复库存，订单标记为已退货。\n请在外部收款工具中自行完成退款 ¥"+Product.money(Long.parseLong(sale[1]))+"。此操作不会发起资金退款。").setNegativeButton("取消",null).setPositiveButton("退款已处理，记录退货",(dd,ww)->{try{db.refund(id);render();toast("退货已记录，库存已恢复");}catch(Exception e){error(e);}}).show());b.show();
+        AlertDialog.Builder b=new MaterialAlertDialogBuilder(this).setTitle(sale[4].equals("1")?"订单已退货":"订单详情").setMessage(text).setPositiveButton("关闭",null);
+        if(sale[4].equals("0"))b.setNeutralButton("整单退货",(d,w)->new MaterialAlertDialogBuilder(this).setTitle("确认整单退货？").setMessage("全部商品将恢复库存，订单标记为已退货。\n请在外部收款工具中自行完成退款 ¥"+Product.money(Long.parseLong(sale[1]))+"。此操作不会发起资金退款。").setNegativeButton("取消",null).setPositiveButton("退款已处理，记录退货",(dd,ww)->{try{db.refund(id);render();toast("退货已记录，库存已恢复");}catch(Exception e){error(e);}}).show());b.show();
     }
     private void data(){
         put(body,label("CSV 数据交换",16,MUTED,false));
@@ -329,12 +380,12 @@ public class MainActivity extends ComponentActivity {
         int existing=0;for(Product p:products)if(db.find(p.barcode)!=null)existing++;
         LinearLayout f=column();f.setPadding(dp(20),dp(8),dp(20),0);put(f,label("共 "+products.size()+" 条 · 新增 "+(products.size()-existing)+" · 更新 "+existing,18,INK,true));
         for(Product p:products.subList(0,Math.min(5,products.size())))put(f,label(p.barcode+"  "+p.name+"\n¥"+Product.money(p.price)+" · CSV 库存 "+p.stock,13,MUTED,false));
-        CheckBox overwrite=new CheckBox(this);overwrite.setText("用 CSV 覆盖已有商品库存");put(f,overwrite);put(f,label("默认保留已有库存，新商品使用 CSV 库存。勾选后按 CSV 数量盘点，并记录差异流水。未列出的商品保持原样。",13,MUTED,false));
+        CheckBox overwrite=new MaterialCheckBox(this);overwrite.setText("用 CSV 覆盖已有商品库存");put(f,overwrite);put(f,label("默认保留已有库存，新商品使用 CSV 库存。勾选后按 CSV 数量盘点，并记录差异流水。未列出的商品保持原样。",13,MUTED,false));
         form("确认导入",f,()->{boolean replace=overwrite.isChecked();work(()->{db.importProducts(products,replace);return "已导入 "+products.size()+" 条商品";},this::toast);});
     }
     private void form(String title,LinearLayout content,Runnable save){
         ScrollView scroll=new ScrollView(this);scroll.addView(content);
-        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(scroll).setNegativeButton("取消",null).setPositiveButton("确认",null).create();
+        AlertDialog dialog=new MaterialAlertDialogBuilder(this).setTitle(title).setView(scroll).setNegativeButton("取消",null).setPositiveButton("确认",null).create();
         dialog.show();
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{if(busy)return;try{save.run();dialog.dismiss();}catch(Exception e){error(e);}});
     }

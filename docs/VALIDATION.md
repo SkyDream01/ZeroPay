@@ -1,3 +1,12 @@
+## Material Design 3 界面迁移（2026-09-18）
+
+- 接入 Material Components 1.13.0 和 Material3 DayNight 主题。四个主页面统一使用主题色、工具栏、圆角卡片、填充 / 色调按钮、浮动标签输入框、Material 复选框和图标底部导航；所有应用确认 / 表单弹窗改为 Material 对话框。
+- 保留原有数据库、整数分金额、事务、套餐和促销规则。浅色与深色模式跟随系统。
+- `assembleDebug`、`testDebugUnitTest`、`lintDebug` 通过；35 项 JVM / Robolectric 测试通过，Lint 0 错误、8 项提示。
+- 专用 Android 15 / API 35 模拟器：通过 `adb shell am instrument` 运行设备冒烟测试，1 项通过，覆盖条码录入与四个页面切换。
+- 检查四页浅色截图、深色收银与结账弹窗。修复 TextInputLayout 标签与旧 hint 重叠、底部导航重复应用系统边距的问题。截图位于 `screenshots/material3/`。
+- 相机识码、实体扫码枪、系统文件选择器及其他屏幕尺寸未在本次设备验证中覆盖。
+
 # 验证记录
 
 ## 1.2.0 固定套餐组合售价（2026-09-17）

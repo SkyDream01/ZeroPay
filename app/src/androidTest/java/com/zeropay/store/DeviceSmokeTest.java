@@ -15,6 +15,11 @@ import java.io.*;
 /** Runs only on a dedicated test device: seeds explicit test products. */
 @RunWith(AndroidJUnit4.class)
 public class DeviceSmokeTest {
+    private void navigate(MainActivity a,String tab){
+        View label=find(a.getWindow().getDecorView(),tab);
+        while(label!=null&&!label.isClickable())label=label.getParent() instanceof View?(View)label.getParent():null;
+        assertNotNull(label);label.performClick();
+    }
     private TextView find(View v,String s){
         if(v instanceof TextView&&((TextView)v).getText().toString().equals(s))return (TextView)v;
         if(v instanceof ViewGroup){ViewGroup g=(ViewGroup)v;for(int i=0;i<g.getChildCount();i++){TextView r=find(g.getChildAt(i),s);if(r!=null)return r;}}
@@ -38,7 +43,7 @@ public class DeviceSmokeTest {
             i.runOnMainSync(()->{EditText e=field(a.getWindow().getDecorView());e.setText("TEST001");find(a.getWindow().getDecorView(),"添加条码").performClick();});
             i.waitForIdleSync();i.runOnMainSync(()->assertNotNull(find(a.getWindow().getDecorView(),"茉莉花茶 500ml")));shot(i,a,"01-cashier");
             String[] names={"02-inventory","03-history","04-data"};String[] tabs={"库存","流水","数据"};
-            for(int n=0;n<tabs.length;n++){final String tab=tabs[n];i.runOnMainSync(()->find(a.getWindow().getDecorView(),tab).performClick());shot(i,a,names[n]);}
+            for(int n=0;n<tabs.length;n++){final String tab=tabs[n];i.runOnMainSync(()->navigate(a,tab));shot(i,a,names[n]);}
         }finally{i.runOnMainSync(a::finish);}
     }
 }
